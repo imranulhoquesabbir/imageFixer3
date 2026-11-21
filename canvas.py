@@ -1145,7 +1145,9 @@ class ImageCanvas(QWidget):
                 return
             ppmm = iw / (297.0 if iw >= ih else 210.0)               # as printed on A4
             k = self.zoom * ppmm                                       # screen pixels per mm
-            font = QFont("Times New Roman")
+            font = QFont()
+            font.setFamilies(["Times New Roman", "Liberation Serif", "DejaVu Serif"])   # always Times New Roman (as printed)
+            font.setStyleHint(QFont.StyleHint.Serif)
             font.setBold(spec.bold)
             font.setPixelSize(max(12, int(round(spec.size * 25.4 / 72 * k))))   # at least 12 px: still readable when zoomed out
             p.setFont(font)
@@ -1163,17 +1165,15 @@ class ImageCanvas(QWidget):
             else:
                 x = x0 + (W - tr.width()) / 2
             y = y0 + (m if spec.pos == "top" else H - m - tr.height())
-            # a thin light outline so it can be read on a dark or red picture too (the print is plain black)
-            from PySide6.QtGui import QPainterPath
-            path = QPainterPath()
-            path.addText(x - tr.left(), y - tr.top(), font, text)
+            # a round badge behind the number (only on the screen; the print and the saved picture have the plain number)
+            cx, cy = x + tr.width() / 2.0, y + tr.height() / 2.0
+            r = max(tr.width(), tr.height()) / 2.0 + max(5.0, font.pixelSize() * 0.55)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p.setPen(QPen(QColor(255, 255, 255, 230), max(2.0, font.pixelSize() * 0.12)))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(path)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0))
-            p.drawPath(path)
+            p.setBrush(QColor(255, 255, 255, 235))
+            p.setPen(QPen(QColor(30, 41, 59, 200), 1.3))
+            p.drawEllipse(QPointF(cx, cy), r, r)
+            p.setPen(QColor(0, 0, 0))                                   # the number: plain black Times New Roman
+            p.drawText(QPointF(x - tr.left(), y - tr.top()), text)
         except Exception:
             if not getattr(self, "_pn_logged", False):             # tell the log once, never break the drawing
                 self._pn_logged = True
