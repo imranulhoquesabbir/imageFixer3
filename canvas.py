@@ -1147,7 +1147,7 @@ class ImageCanvas(QWidget):
             k = self.zoom * ppmm                                       # screen pixels per mm
             font = QFont("Times New Roman")
             font.setBold(spec.bold)
-            font.setPixelSize(max(6, int(round(spec.size * 25.4 / 72 * k))))
+            font.setPixelSize(max(12, int(round(spec.size * 25.4 / 72 * k))))   # at least 12 px: still readable when zoomed out
             p.setFont(font)
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
             text = str(spec.start - 1 + n)
@@ -1175,7 +1175,14 @@ class ImageCanvas(QWidget):
             p.setBrush(QColor(0, 0, 0))
             p.drawPath(path)
         except Exception:
-            pass
+            if not getattr(self, "_pn_logged", False):             # tell the log once, never break the drawing
+                self._pn_logged = True
+                try:
+                    import traceback
+                    from app import log_error
+                    log_error("Page number preview failed:\n" + traceback.format_exc())
+                except Exception:
+                    pass
 
     def _paint_main(self, e):
         p = QPainter(self)
