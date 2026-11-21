@@ -803,6 +803,7 @@ class MainWindow(QMainWindow):
         m.addAction(self.actAbout)
         m.addSeparator()
         self._build_print_menu(m)
+        QTimer.singleShot(4000, self._prewarm_print)          # print screen ready in the background (see printweb.prewarm)
         a = QAction("Choose save folder...", self)
         a.triggered.connect(self.choose_dir)
         m.addAction(a)
@@ -1788,8 +1789,24 @@ class MainWindow(QMainWindow):
                                       "click the tray icon to continue. Nothing is deleted until you remove a picture or exit.")
         self.actPrintSleep.toggled.connect(lambda on: self.settings.setValue("print_sleep", on))
         sub.addAction(self.actPrintSleep)
+        sub.addSeparator()
+        self.actPrintWarm = QAction("Open the print screen faster (keeps it ready in the background, uses a little more memory)", self)
+        self.actPrintWarm.setCheckable(True)
+        self.actPrintWarm.setChecked(self.settings.value("print_prewarm", True, type=bool))
+        self.actPrintWarm.toggled.connect(lambda on: self.settings.setValue("print_prewarm", on))
+        sub.addAction(self.actPrintWarm)
         sub.aboutToShow.connect(self._refresh_print_menu)
         self._refresh_print_menu()
+
+    def _prewarm_print(self):
+        """Shortly after start: get the print screen ready in the background so Ctrl+P opens it at once."""
+        try:
+            if self.quitting or self._print_mode() != "builtin":
+                return
+            import printweb
+            printweb.prewarm(self, self.settings, engine=self.settings.value("print_prewarm", True, type=bool))
+        except Exception:
+            pass
 
     def _print_mode(self):
         """'builtin' (Image Fixer's own print screen), 'external' (the chosen .exe) or 'windows' (the normal print window).

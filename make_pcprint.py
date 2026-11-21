@@ -125,6 +125,14 @@ EMBED_HEAD = ("<script>window.EMBED=1</script>"
 
 @app.get("/")
 def index():''')
+# faster print screen: printer list / paper sizes are kept (see drv_cached), Esc / Back / F11 reach the Image Fixer window
+s = rep(s, '@app.get("/api/untick")\ndef untick():', '@app.post("/api/embed")\ndef embed_cmd():\n    """The page asks the Image Fixer window to close or to go full screen (Esc, Back, F11)."""\n    d = request.get_json(silent=True) or {}\n    h = HOOKS.get("embed")\n    if h and d.get("cmd") in ("close", "full"):\n        h(d["cmd"])\n    return jsonify(ok=True)\n\n\n' + '@app.get("/api/untick")\ndef untick():')
+s = rep(s, '@app.get("/api/printers")\ndef printers():', 'DRV_CACHE = {}       # key -> (time, value): reading the printer list / paper sizes from the driver is slow\nDRV_BUSY = set()\n\n\ndef drv_cached(key, fn, ttl=60.0):\n    """The last answer comes back at once; when it is older than ttl it is read again in the background, so the NEXT\n    opening of the print screen has fresh data.  Only the very first reading waits for the driver."""\n    hit = DRV_CACHE.get(key)\n    if hit:\n        if time.time() - hit[0] > ttl and key not in DRV_BUSY:\n            DRV_BUSY.add(key)\n\n            def again():\n                try:\n                    with DRV_LOCK:\n                        v = fn()\n                    if not (isinstance(v, dict) and v.get("error")):\n                        DRV_CACHE[key] = (time.time(), v)\n                except Exception:\n                    DRV_CACHE.pop(key, None)\n                finally:\n                    DRV_BUSY.discard(key)\n            threading.Thread(target=again, daemon=True).start()\n        return hit[1]\n    v = fn()\n    if not (isinstance(v, dict) and v.get("error")):\n        DRV_CACHE[key] = (time.time(), v)\n    return v\n\n\ndef warm_printers():\n    """Reads the printer list and the paper sizes of the first / default printer now (background thread)."""\n    try:\n        with DRV_LOCK:\n            lst = drv_cached("*", printing.list_printers)\n            names = []\n            for p in lst:\n                if p.get("default") and p["name"] not in names:\n                    names.append(p["name"])\n            if lst and lst[0]["name"] not in names:\n                names.append(lst[0]["name"])\n            for n in names[:2]:\n                drv_cached("c:" + n, lambda n=n: printing.caps(n))\n    except Exception:\n        pass\n\n\n' + '@app.get("/api/printers")\ndef printers():')
+s = rep(s, "        return jsonify(printing.list_printers())", '        return jsonify(drv_cached("*", printing.list_printers))')
+s = rep(s, '        return jsonify(printing.caps(request.args.get("name", "")))',
+        '        pn = request.args.get("name", "")\n        return jsonify(drv_cached("c:" + pn, lambda: printing.caps(pn)))')
+s = rep(s, "                data = printing.driver_dialog(printer_name, base)\n",
+        "                data = printing.driver_dialog(printer_name, base)\n                DRV_CACHE.clear()          # the driver settings may have changed: read them again next time\n")
 open(os.path.join(dst, "server.py"), "w", encoding="utf-8").write(s)
 open(os.path.join(dst, "__init__.py"), "w").write('"""The PrintMerged / PC Print print screen, running inside Image Fixer (see printweb.py)."""\n')
 
@@ -134,5 +142,14 @@ h = open(p, encoding="utf-8").read()
 h = rep(h, "(async()=>{initAuto();upLoad();svLoad();", "(async()=>{if(!window.EMBED){initAuto();upLoad()}svLoad();")
 # Image Fixer opens straight on the preview page (step 2); "Back to pages" still goes to the page list
 h = rep(h, "await refresh(true);setInterval(", "await refresh(true);if(window.EMBED){try{const u=await (await api('/api/untick')).json();FILES.forEach(f=>{if(u.includes(f.id))for(let p=0;p<f.pages;p++)DESEL.add(key(f.id,p))});renderPages()}catch{}if(FILES.length)go(2)}setInterval(")
+# Image Fixer window: Esc / Back go straight back to Image Fixer (the page list is of no use there), same keys as Image Fixer
+h = rep(h, "async function api(url,opt){return fetch(url,opt)}\n", "async function api(url,opt){return fetch(url,opt)}\nfunction embedCmd(c){try{fetch('/api/embed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})})}catch{}}   // Image Fixer window: close / full screen\n")
+h = rep(h, "$('#close').onclick=()=>go(1);", "$('#close').onclick=()=>window.EMBED?embedCmd('close'):go(1);")
+h = rep(h, """    if(!$('#numpanel').hidden)$('#numpanel').hidden=true;else if(TF.on&&TF.sel){TF.sel=null;tfSelChanged()}else if(STEP===2)go(1);
+  }
+});
+""", "    if(PC.open)return;   // the perspective-crop window handles its own Escape\n    const t=e.target;\n    if(window.EMBED&&t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){t.blur();return}\n    if(!$('#numpanel').hidden)$('#numpanel').hidden=true;else if(TF.on&&TF.sel){TF.sel=null;tfSelChanged()}else if(window.EMBED)embedCmd('close');else if(STEP===2)go(1);\n  }\n});\ndocument.addEventListener('keydown',e=>{   // Image Fixer window: the same important keys as in Image Fixer\n  if(!window.EMBED||PC.open)return;\n  if(e.key==='F11'){e.preventDefault();embedCmd('full');return}\n  if(!(e.ctrlKey||e.metaKey)||e.altKey||e.shiftKey)return;\n  const k=e.key.toLowerCase();\n  if(k==='s'){e.preventDefault();$('#bsave').click()}          // Ctrl+S = Save PDF\n  else if(k==='o'){e.preventDefault();$('#add').click()}       // Ctrl+O = Add files\n  else if(k==='w'){e.preventDefault();embedCmd('close')}       // Ctrl+W = back to Image Fixer\n});\n")
+h = rep(h, "await refresh(true);if(window.EMBED){try{const u=",
+        "await refresh(true);if(window.EMBED){{const b=$('#close');b.title='Back to Image Fixer (Esc)';const l=b.querySelector('.lbl2');if(l)l.textContent='Back'}try{const u=")
 open(p, "w", encoding="utf-8").write(h)
 print("ok", len(s.splitlines()), "lines in server.py")
