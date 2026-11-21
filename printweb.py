@@ -17,7 +17,6 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QVBoxLayout
 
-from numpanel import NumStore, spec_from_web, spec_to_web
 
 PORT = 53187                      # always the same port when it is free, so the page remembers its own small settings
 FILTER = "PDF and images (*.pdf *.jpg *.jpeg *.png *.webp *.bmp *.gif *.tif *.tiff)"
@@ -44,23 +43,6 @@ class _OnGui(QObject):
         fut = Future()
         self._call.emit((fn, fut))
         return fut.result()
-
-
-class _NumBridge(QObject):
-    """A page number change made on the print screen (server thread) -> the shared setting (window thread)."""
-    from_page = Signal(object)
-
-    def __init__(self):
-        super().__init__()
-        self.store = NumStore.get()
-        self.from_page.connect(self._apply, Qt.ConnectionType.QueuedConnection)
-
-    @Slot(object)
-    def _apply(self, d):
-        try:
-            self.store.set_spec(spec_from_web(d, self.store.spec()), source="page")
-        except Exception:
-            pass
 
 
 def _start_server():
@@ -115,8 +97,6 @@ class PrintScreen(QDialog):
                          | Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint)
         self.settings = settings
         self.server = server
-        self.store = NumStore.get()
-        self.store.changed.connect(self._numbers_changed)       # changed in the main window's Numbers tab -> the page follows
         self.setWindowTitle("PC Print")
         self.setWindowIcon(parent.windowIcon())
         lay = QVBoxLayout(self)
@@ -134,16 +114,7 @@ class PrintScreen(QDialog):
             except Exception:
                 pass
 
-    def _numbers_changed(self, source):
-        if source != "page":
-            self.server.push_num(spec_to_web(self.store.spec()))
-
     def done(self, r):
-        try:
-            self.store.changed.disconnect(self._numbers_changed)
-        except Exception:
-            pass
-        self.server.HOOKS["num"] = None
         try:
             self.settings.setValue("printscreen_geometry", self.saveGeometry())
         except Exception:
@@ -175,11 +146,7 @@ def open_print_screen(win, settings, files, ticked=None):
     # the file windows of the page (Add files, Choose folder) are Qt windows of this program
     server.HOOKS["pick"] = lambda: list(gui.ask(lambda: QFileDialog.getOpenFileNames(dlg, "Add files", "", FILTER)[0]))
     server.HOOKS["pickdir"] = lambda: gui.ask(lambda: QFileDialog.getExistingDirectory(dlg, "Choose the save folder"))
-    if _state["bridge"] is None:
-        _state["bridge"] = _NumBridge()
-    bridge = _state["bridge"]
-    server.HOOKS["num"] = lambda d: bridge.from_page.emit(dict(d))      # the page changed a page number setting
-    server.push_num(spec_to_web(NumStore.get().spec()))                  # the page starts with Image Fixer's setting
+    # the print screen keeps its OWN page number setting (saved by the page itself); it is not linked to the Numbers tab
     _forget_files(server)
     server.register(files, sort=False)                           # in the order of Image Fixer's pictures
     keep = {os.path.abspath(f) for f in (files if ticked is None else ticked)}

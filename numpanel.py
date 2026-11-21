@@ -160,8 +160,9 @@ class NumberTab(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 4, 4, 4)
         lay.setSpacing(10)
-        note = QLabel("Page numbers for Print (Ctrl+P) and \"All pages as one PDF\". Pages are numbered in the order of "
-                      "the thumbnails. The print screen has the same setting: change it here or there, both follow at once.")
+        note = QLabel("Page numbers on the main page (shown on the picture) and in \"All pages as one PDF\". Pages are "
+                      "numbered in the order of the thumbnails. The print screen (Ctrl+P) has its own page number "
+                      "setting: changing it there does not change this one.")
         note.setWordWrap(True)
         lay.addWidget(note)
         self.panel = PageNumberPanel(self.store.spec())
