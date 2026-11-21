@@ -1399,6 +1399,19 @@ class MainWindow(QMainWindow):
         self.settings.setValue("geometry", self.saveGeometry())
         if self.tray is not None:
             self.tray.hide()
+        try:
+            import printweb
+            printweb.shutdown()                                # the print screen's web engine is closed properly first
+        except Exception:
+            pass
+        try:
+            self.settings.sync()                               # settings are on disk before anything below can end the process
+            import threading
+            t = threading.Timer(10, lambda: os._exit(0))       # if the shut down hangs for any reason, the process still ends
+            t.daemon = True
+            t.start()
+        except Exception:
+            pass
         QApplication.quit()
 
     # --------------------------------------------------------------- adding

@@ -156,6 +156,21 @@ class PrintScreen(QDialog):
         super().done(r)
 
 
+def shutdown():
+    """Image Fixer is closing: the hidden print window, its web page and the small local server are closed here, in the
+    right order, so the web engine never has to be torn down by the interpreter at the very end (that can hang)."""
+    dlg, _state["dlg"] = _state.get("dlg"), None
+    try:
+        if dlg is not None:
+            dlg.view.setUrl(QUrl("about:blank"))
+            dlg.close()
+    except Exception:
+        pass
+    http, _state["http"] = _state.get("http"), None
+    if http is not None:
+        threading.Thread(target=http.shutdown, daemon=True).start()
+
+
 def prewarm(win, settings, engine=True):
     """A few seconds after Image Fixer started (nothing is shown): starts the small local server, reads the printer list
     and paper sizes from the driver (background thread) and, with engine=True, starts the web engine with the print
