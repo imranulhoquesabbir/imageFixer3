@@ -1354,7 +1354,7 @@ function pvImg(url){
   const im=el('img',{alt:'',loading:'lazy'});
   im.style.aspectRatio=String(pvAsp());
   im.dataset.t=url.replace(/([?&])pw=\d+/,'$1pw={PW}');   // address with a hole for the picture width
-  im.src=url.replace('{PW}',PW)+'&pv='+PVV;
+  im.src=url.replace('{PW}',PW)+'&pv='+PVV+'&v='+REV;   // REV: a removed page changes the numbers of the others
   return im;
 }
 function pvKeep(top){if(top)requestAnimationFrame(()=>{$('#pvstage').scrollTop=top})}
@@ -1364,7 +1364,7 @@ function pvUpgrade(need){   // sharper pictures for the sheets that are already 
   PW=need;
   const stage=$('#pvstage').getBoundingClientRect();
   imgs.forEach(im=>{
-    const url=im.dataset.t.replace('{PW}',PW)+'&pv='+PVV,r=im.getBoundingClientRect();
+    const url=im.dataset.t.replace('{PW}',PW)+'&pv='+PVV+'&v='+REV,r=im.getBoundingClientRect();
     if(r.bottom<stage.top-stage.height||r.top>stage.bottom+stage.height){im.src=url;return}   // far away: just change it, loads when near
     const pre=new Image();pre.onload=()=>{if(im.isConnected)im.src=url};pre.src=url;       // near: swap when ready, no blank flash
   });
