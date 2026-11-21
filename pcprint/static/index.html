@@ -670,6 +670,7 @@ const GLYPH={'➔':'arrow-right','➜':'arrow-right','⧉':'copy','✥':'move','
 const glyphEl=g=>GLYPH[g]?ic(GLYPH[g]):document.createTextNode(g);
 function el(t,props={},...kids){const e=document.createElement(t);Object.assign(e,props);kids.forEach(k=>e.append(k));return e}
 async function api(url,opt){return fetch(url,opt)}
+function embedCmd(c){try{fetch('/api/embed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})})}catch{}}   // Image Fixer window: close / full screen
 let tT=null;
 function toast(t){const b=$('#toast');b.textContent=t;b.hidden=false;b.style.bottom=(typeof TF!=='undefined'&&TF.on&&STEP===2)?'100px':'';clearTimeout(tT);tT=setTimeout(()=>b.hidden=true,4500)}
 const key=(f,p)=>f+':'+p;
@@ -899,7 +900,7 @@ function go(n){
   if(n===2){msg('');numNote();if(!CAPS||CAPS.error)loadPrinters();else pvRender()}
 }
 $('#bopen').onclick=()=>go(2);
-$('#close').onclick=()=>go(1);
+$('#close').onclick=()=>window.EMBED?embedCmd('close'):go(1);   // inside Image Fixer: straight back to Image Fixer (the page list has nothing to do)
 $('#bside').onclick=()=>{
   $('#main').classList.toggle('collapsed');
   setTimeout(()=>{zoomBy(1)},300);
@@ -1147,8 +1148,20 @@ $('#pmsg').onclick=()=>$('#pmsg').hidden=true;
 document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='p'){e.preventDefault();if(STEP===1)go(2);else $('#bprint').click()}
   else if(e.key==='Escape'){
-    if(!$('#numpanel').hidden)$('#numpanel').hidden=true;else if(TF.on&&TF.sel){TF.sel=null;tfSelChanged()}else if(STEP===2)go(1);
+    if(PC.open)return;   // the perspective-crop window handles its own Escape
+    const t=e.target;
+    if(window.EMBED&&t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)){t.blur();return}
+    if(!$('#numpanel').hidden)$('#numpanel').hidden=true;else if(TF.on&&TF.sel){TF.sel=null;tfSelChanged()}else if(window.EMBED)embedCmd('close');else if(STEP===2)go(1);
   }
+});
+document.addEventListener('keydown',e=>{   // Image Fixer window: the same important keys as in Image Fixer
+  if(!window.EMBED||PC.open)return;
+  if(e.key==='F11'){e.preventDefault();embedCmd('full');return}
+  if(!(e.ctrlKey||e.metaKey)||e.altKey||e.shiftKey)return;
+  const k=e.key.toLowerCase();
+  if(k==='s'){e.preventDefault();$('#bsave').click()}          // Ctrl+S = Save PDF
+  else if(k==='o'){e.preventDefault();$('#add').click()}       // Ctrl+O = Add files
+  else if(k==='w'){e.preventDefault();embedCmd('close')}       // Ctrl+W = back to Image Fixer
 });
 
 async function loadPrinters(){
@@ -2400,7 +2413,7 @@ $('#updgo').onclick=async()=>{
   }catch{$('#updmerr').textContent='Could not start the update.'}
   upLoad();
 };
-(async()=>{if(!window.EMBED){initAuto();upLoad()}svLoad();await loadSettings();numNote();await refresh(true);if(window.EMBED){try{const u=await (await api('/api/untick')).json();FILES.forEach(f=>{if(u.includes(f.id))for(let p=0;p<f.pages;p++)DESEL.add(key(f.id,p))});renderPages()}catch{}if(FILES.length)go(2)}setInterval(()=>{if(!document.hidden)refresh()},1200);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})})();
+(async()=>{if(!window.EMBED){initAuto();upLoad()}svLoad();await loadSettings();numNote();await refresh(true);if(window.EMBED){{const b=$('#close');b.title='Back to Image Fixer (Esc)';const l=b.querySelector('.lbl2');if(l)l.textContent='Back'}try{const u=await (await api('/api/untick')).json();FILES.forEach(f=>{if(u.includes(f.id))for(let p=0;p<f.pages;p++)DESEL.add(key(f.id,p))});renderPages()}catch{}if(FILES.length)go(2)}setInterval(()=>{if(!document.hidden)refresh()},1200);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})})();
 </script>
 </body>
 </html>
