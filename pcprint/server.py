@@ -596,6 +596,16 @@ def move():
 EMBED_UNTICK = []      # file ids that start unticked (the other open pictures of Image Fixer: they only keep the numbering right)
 
 
+@app.post("/api/embed")
+def embed_cmd():
+    """The page asks the Image Fixer window to close or to go full screen (Esc, Back, F11)."""
+    d = request.get_json(silent=True) or {}
+    h = HOOKS.get("embed")
+    if h and d.get("cmd") in ("close", "full"):
+        h(d["cmd"])
+    return jsonify(ok=True)
+
+
 @app.get("/api/untick")
 def untick():
     return jsonify(list(EMBED_UNTICK))
@@ -1374,12 +1384,59 @@ def preview():
     return send_img(img, want_hq())
 
 
+DRV_CACHE = {}       # key -> (time, value): reading the printer list / paper sizes from the driver is slow
+DRV_BUSY = set()
+
+
+def drv_cached(key, fn, ttl=60.0):
+    """The last answer comes back at once; when it is older than ttl it is read again in the background, so the NEXT
+    opening of the print screen has fresh data.  Only the very first reading waits for the driver."""
+    hit = DRV_CACHE.get(key)
+    if hit:
+        if time.time() - hit[0] > ttl and key not in DRV_BUSY:
+            DRV_BUSY.add(key)
+
+            def again():
+                try:
+                    with DRV_LOCK:
+                        v = fn()
+                    if not (isinstance(v, dict) and v.get("error")):
+                        DRV_CACHE[key] = (time.time(), v)
+                except Exception:
+                    DRV_CACHE.pop(key, None)
+                finally:
+                    DRV_BUSY.discard(key)
+            threading.Thread(target=again, daemon=True).start()
+        return hit[1]
+    v = fn()
+    if not (isinstance(v, dict) and v.get("error")):
+        DRV_CACHE[key] = (time.time(), v)
+    return v
+
+
+def warm_printers():
+    """Reads the printer list and the paper sizes of the first / default printer now (background thread)."""
+    try:
+        with DRV_LOCK:
+            lst = drv_cached("*", printing.list_printers)
+            names = []
+            for p in lst:
+                if p.get("default") and p["name"] not in names:
+                    names.append(p["name"])
+            if lst and lst[0]["name"] not in names:
+                names.append(lst[0]["name"])
+            for n in names[:2]:
+                drv_cached("c:" + n, lambda n=n: printing.caps(n))
+    except Exception:
+        pass
+
+
 @app.get("/api/printers")
 def printers():
     if not DRV_LOCK.acquire(timeout=20):
         return jsonify(error="The printer is busy. Try again in a moment."), 503
     try:
-        return jsonify(printing.list_printers())
+        return jsonify(drv_cached("*", printing.list_printers))
     except Exception as e:
         return jsonify(error=str(e)), 500
     finally:
@@ -1391,7 +1448,8 @@ def printer():
     if not DRV_LOCK.acquire(timeout=20):
         return jsonify(error="The printer is busy. Try again in a moment."), 503
     try:
-        return jsonify(printing.caps(request.args.get("name", "")))
+        pn = request.args.get("name", "")
+        return jsonify(drv_cached("c:" + pn, lambda: printing.caps(pn)))
     except Exception as e:
         return jsonify(error=str(e)), 500
     finally:
@@ -1451,6 +1509,7 @@ def profiles_new():
         with DIALOG_LOCK:
             try:
                 data = printing.driver_dialog(printer_name, base)
+                DRV_CACHE.clear()          # the driver settings may have changed: read them again next time
                 if data is None:
                     job_end(jid, state="cancel")
                     return
