@@ -1566,7 +1566,7 @@ class MainWindow(QMainWindow):
             self.lblStatus.setText("Adding pictures  %d / %d" % (self._add_done, self._add_total))
         self._refresh_counts()
         if self._add_queue:
-            QTimer.singleShot(0, self._add_tick)
+            QTimer.singleShot(15, self._add_tick)            # a real gap: clicks, repaints and the progress bar get their turn
             return
         n = self._add_total
         self._adding = False

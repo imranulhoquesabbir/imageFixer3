@@ -11,6 +11,7 @@ import core
 import nodecurve
 import strokefix
 from feedback import Effects, rotate_cursor
+from jobs import run_background
 from theme import copy_cursor, dropper_cursor, move_selection_cursor
 
 
@@ -134,6 +135,7 @@ class ImageCanvas(QWidget):
         self._scale_timer.setSingleShot(True)
         self._scale_timer.setInterval(60)
         self._scale_timer.timeout.connect(self._make_scaled)
+        self._scale_busy = False              # the crisp zoomed-out copy is being made in a worker thread
         self._selmove = None                  # dragging the selection outline: {'start': QPointF, 'd': (dx, dy)}
         self.sel_mode_name = "add"            # set by the card: the outline can be dragged in the modes 'new' and 'add'
         self._move_sel_cursor = move_selection_cursor()
@@ -1098,26 +1100,55 @@ class ImageCanvas(QWidget):
 
     def _scaled_ready(self):
         """The shrunk copy for the current zoom, or None (then the normal drawing is used and a better copy is made
-        a moment later, when nothing moves any more)."""
+        a moment later, in a worker thread, so the window never waits for it)."""
         if self._img is None or self.zoom >= 0.98:
             return None
         if self._scaled is not None and self._scaled[0] == self._scaled_key():
             return self._scaled[1]
-        self._scale_timer.start()
+        # NOT start() on every repaint: that restarted the timer again and again, so while anything animated
+        # (zoom badge, toast, resize) the good copy was never made and every frame was a slow big-picture downscale.
+        if not self._scale_timer.isActive() and not self._scale_busy:
+            self._scale_timer.start()
         return None
 
     def _make_scaled(self):
         if self._img is None or self.zoom >= 0.98:
             self._scaled = None
             return
+        if self._scale_busy:
+            return
         dpr = self._dpr()
         w = max(1, int(round(self._iw * self.zoom * dpr)))
         h = max(1, int(round(self._ih * self.zoom * dpr)))
         key = self._scaled_key()
-        s = self._disp().scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        s.setDevicePixelRatio(dpr)
-        self._scaled = (key, s)
-        self.update()
+        if self._scaled is not None and self._scaled[0] == key:
+            return
+        src = self._disp()
+        self._scale_busy = True
+
+        def work(progress):                            # QImage.scaled is thread safe; the picture is only read
+            s = src.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            s.setDevicePixelRatio(dpr)
+            return s
+
+        def done(s):
+            try:
+                self._scale_busy = False
+                if self._img is None:
+                    return
+                self._scaled = (key, s)
+                self.update()
+                if self.zoom < 0.98 and self._scaled_key() != key:      # the view moved meanwhile: make the next one
+                    self._scale_timer.start()
+            except RuntimeError:                       # the widget was deleted while the copy was being made
+                pass
+
+        def fail(msg):
+            try:
+                self._scale_busy = False
+            except RuntimeError:
+                pass
+        run_background(work, done, fail)
 
     # -------------------------------------------------------------- paint
     def paintEvent(self, e):

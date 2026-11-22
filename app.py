@@ -97,11 +97,17 @@ def main():
     try:
         from PySide6.QtCore import QThread, QThreadPool
         pool = QThreadPool.globalInstance()
-        pool.setMaxThreadCount(max(2, (os.cpu_count() or 4) - 1))      # keep one core free for the window
+        cpus = os.cpu_count() or 4
+        pool.setMaxThreadCount(2 if cpus <= 4 else min(4, cpus - 2))   # the workers run Python code: more of them only fight the window thread for the GIL
         pool.setThreadPriority(QThread.Priority.LowPriority)
     except Exception:
         pass
     app.setQuitOnLastWindowClosed(False)
+    try:
+        import stallwatch
+        stallwatch.start(LOG_DIR)                 # writes stall.log when the window freezes: shows exactly where
+    except Exception:
+        pass
     app.setApplicationName("Image Fixer")
     app.setOrganizationName("ImageFixer")
     name = "ImageFixer-" + (os.environ.get("USERNAME") or os.environ.get("USER") or "user")
