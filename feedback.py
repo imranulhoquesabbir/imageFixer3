@@ -13,7 +13,7 @@ import time
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (QBrush, QColor, QCursor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath,
                            QPen, QPixmap, QPolygonF)
-from PySide6.QtWidgets import QPushButton, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QToolButton, QWidget
 
 # False = no text messages for every change (toast pill, shortcut chip).  A light animation on the picture shows that
 # the work was done instead.  Warnings and errors are still shown as text.  Set to True for the old behaviour.
@@ -879,11 +879,17 @@ class _ButtonFilter(QObject):
         return False
 
 
-def install_ripples(app):
-    """Every push button / tool button gives a soft wave where it was pressed."""
-    if getattr(app, "_ifx_ripples", None) is None:
-        app._ifx_ripples = _ButtonFilter(app)
-        app.installEventFilter(app._ifx_ripples)
+def install_ripples(widget):
+    """Every push button / tool button below `widget` gives a soft wave where it was pressed.
+    The filter sits on the buttons only.  (It used to sit on the whole application: Qt then called this Python code for
+    EVERY event of EVERY object - paints, timers, layout - which made resizing / full screen / sliding feel heavy.)
+    Call it again for widgets made later (a new picture card); a button that already has it is not doubled."""
+    app = QApplication.instance()
+    f = getattr(app, "_ifx_ripples", None)
+    if f is None:
+        f = app._ifx_ripples = _ButtonFilter(app)
+    for b in widget.findChildren(QPushButton) + widget.findChildren(QToolButton):
+        b.installEventFilter(f)
 
 
 # ------------------------------------------------------------------------------------------------ drop zone

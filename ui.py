@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self._build_shortcuts()
         self.drop = DropOverlay(self)              # dims the window and shows a drop zone while files are dragged over it
-        install_ripples(QApplication.instance())   # every button gives a soft wave where it is pressed
+        install_ripples(self)   # every button gives a soft wave where it is pressed
         self.updater.start()                      # auto update: looks for a new build a few seconds after start (if switched on)
         self._apply_ui_size(self.settings.value("ui_size", "auto", type=str), say=False)
         self._apply_upscale(self.settings.value("upscale_step", "1.5", type=str), say=False)
@@ -1292,7 +1292,18 @@ class MainWindow(QMainWindow):
 
     def _restyle(self):
         """Tighter / normal style sheet after the window became small / big again."""
-        QApplication.instance().setStyleSheet(scaled_qss(self._ui_scale, self._compact_style))
+        # Only the top bar and the bottom bar get the tighter style.  Setting the style sheet of the WHOLE application here
+        # made Qt re-style every button and slider of every open picture (seconds of freeze each time the window went
+        # between small and full screen).  The pictures adapt to a small window by themselves (Card._fit_card).
+        css = scaled_qss(self._ui_scale, True) if self._compact_style else ""
+        self.setUpdatesEnabled(False)
+        try:
+            for lay in (self.hdrLayout, self.barLayout):
+                w = lay.parentWidget()
+                if w is not None and w.styleSheet() != css:
+                    w.setStyleSheet(css)
+        finally:
+            self.setUpdatesEnabled(True)
         self._fit_layout()
 
     def _thumb_hint(self):
@@ -1336,10 +1347,15 @@ class MainWindow(QMainWindow):
         else:
             f = {"small": 0.9, "normal": 1.0, "large": 1.15, "xl": 1.3}.get(mode, 1.0)
         self._ui_scale = f
-        QApplication.instance().setStyleSheet(scaled_qss(f, self._compact_style))
+        QApplication.instance().setStyleSheet(scaled_qss(f, False))
+        if hasattr(self, "hdrLayout"):
+            self._restyle()
         if hasattr(self, "strip"):
-            self._thumb_px = self._thumb_px_for(self.height())
-            self._apply_thumb_size()
+            px = self._thumb_px_for(self.height())
+            if px != getattr(self, "_thumb_px", None) or getattr(self, "_thumb_n", -1) != self.strip.count():
+                self._thumb_px = px                      # only when the size really changed (not on every resize step)
+                self._thumb_n = self.strip.count()
+                self._apply_thumb_size()
         if say:
             self.say("Interface size changed.")
 
@@ -1580,6 +1596,7 @@ class MainWindow(QMainWindow):
 
     def _add_one(self, path):
         c = Card(path)
+        install_ripples(c)                                              # the soft wave on this picture's buttons
         c.origin = self._origin.pop(path, "paste" if path.startswith(self.tmp) else "file")
         c.runner = self.runner
         c.editedChanged.connect(self._card_edited)
@@ -1655,9 +1672,11 @@ class MainWindow(QMainWindow):
             for w in (self.btnSave, self.btnSaveMore):
                 w.setEnabled(n > 0)
             self.btnApplyAll.setEnabled(n > 1)
-        for c in (self.carousel.cards if n else []):
-            c.btnSaveAll.setText(label)
-            c.btnSaveAll.setEnabled(unsaved > 0)
+        if (label, unsaved, n) != getattr(self, "_saveall_key", None):
+            self._saveall_key = (label, unsaved, n)
+            for c in (self.carousel.cards if n else []):      # (was done for EVERY picture on every call: slow with many)
+                c.btnSaveAll.setText(label)
+                c.btnSaveAll.setEnabled(unsaved > 0)
         self.btnClear.setEnabled(n > 0)
         self.btnPageL.setEnabled(n > 1 and i > 0)
         self.btnPageR.setEnabled(n > 1 and i < n - 1)
