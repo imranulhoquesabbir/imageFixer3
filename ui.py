@@ -2043,8 +2043,12 @@ class MainWindow(QMainWindow):
                     self.say("Nothing to print.")
                     return
 
+                sel = [(f, c) for f, c in pairs if f in ticked]
+
                 def go():
-                    if not printweb.open_print_screen(self, self.settings, [f for f, _ in pairs if f in ticked]):
+                    if not printweb.open_print_screen(self, self.settings, [f for f, _ in sel],
+                                                      uids=[c.uid for _, c in sel],
+                                                      live=[c.uid for c in self.carousel.cards]):
                         self._print_builtin_qt(cards)         # the print screen could not start: the older Qt one
                 QTimer.singleShot(0, go)
             self._export_for_print(everything, "printing", show)
