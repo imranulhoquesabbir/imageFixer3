@@ -749,6 +749,16 @@ def stamp(img, num, ppmm):
 
 
 # ------------------------------------------------------------- drawing
+def get_turn(v):
+    """The Rotate picture setting: None = automatic turn, or 0 / 90 / 180 / 270 degrees clockwise (exactly that)."""
+    if v is None or str(v).strip().lower() in ("", "auto"):
+        return None
+    try:
+        return (int(round(float(v) / 90.0)) * 90) % 360
+    except Exception:
+        return None
+
+
 def get_pct(v):
     """Custom scaling percent (of actual size), kept between 10 and 400."""
     try:
@@ -767,12 +777,31 @@ def flatten(img):
     return img.convert("RGB")
 
 
-def compose(f, idx, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0):
+def should_turn(w, h, aw, ah, real=None):
+    """Turn the picture 90 degrees only when that really helps.
+    real = None (fit / fill): turn only when it makes the picture clearly (15%) bigger - a nearly square picture
+           (941 x 922) is 'landscape' by 2%, turning it gains nothing and just lays the text sideways.
+    real = scale (actual size / custom %): the size is fixed, so turning is only done when the picture is cut off
+           as it is but fits when turned."""
+    if w <= 0 or h <= 0 or aw <= 0 or ah <= 0:
+        return False
+    if (w > h) == (aw > ah):
+        return False
+    if real is not None:
+        fits = w * real <= aw + 0.5 and h * real <= ah + 0.5
+        fits_turned = h * real <= aw + 0.5 and w * real <= ah + 0.5
+        return (not fits) and fits_turned
+    return min(aw / float(h), ah / float(w)) >= 1.15 * min(aw / float(w), ah / float(h))
+
+
+def compose(f, idx, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0, turn=None):
     """Draw one page on a white sheet of W x H pixels.
     mode "fit":    whole page fitted inside the area, nothing cut off
     mode "actual": real size (needs ppmm = pixels per mm), may be cut at the edges
     mode "fill":   page covers the whole area, the extra part is cropped
-    mode "custom": real size x pct/100, centered (needs ppmm), may be cut at the edges"""
+    mode "custom": real size x pct/100, centered (needs ppmm), may be cut at the edges
+    turn: None = automatic turn (rotate flag) | 0 / 90 / 180 / 270 = the picture is turned exactly so many degrees
+    clockwise, whatever the paper or orientation is (the Rotate picture button).  Automatic turning is then off."""
     def pick(fw, fh, unit_mm):
         if mode == "fill":
             s = max(W / fw, H / fh)
@@ -788,8 +817,8 @@ def compose(f, idx, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0):
         with pdf_doc(f["path"]) as doc:
             pg = doc[idx]
             pw, ph = pg.rect.width, pg.rect.height
-            rot = rotate and ((pw > ph) != (W > H))
-            fw, fh = (ph, pw) if rot else (pw, ph)
+            deg = turn if turn is not None else (270 if (rotate and should_turn(pw, ph, W, H, (ppmm * 25.4 / 72 * (pct / 100.0 if mode == "custom" else 1.0)) if (mode in ("actual", "custom") and ppmm) else None)) else 0)
+            fw, fh = (ph, pw) if deg in (90, 270) else (pw, ph)
             s = pick(fw, fh, 25.4 / 72)
             pix = pg.get_pixmap(matrix=fitz.Matrix(s, s),
                                 colorspace=fitz.csGRAY if mono else fitz.csRGB, alpha=False)
@@ -806,26 +835,26 @@ def compose(f, idx, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0):
             img.draft("RGB", (max(W, H), max(W, H)))
         img = flatten(ImageOps.exif_transpose(img))
         iw, ih = img.size
-        rot = rotate and ((iw > ih) != (W > H))
-        fw, fh = (ih, iw) if rot else (iw, ih)
+        deg = turn if turn is not None else (270 if (rotate and should_turn(iw, ih, W, H, (ppmm * 25.4 / dpi * (pct / 100.0 if mode == "custom" else 1.0)) if (mode in ("actual", "custom") and ppmm) else None)) else 0)
+        fw, fh = (ih, iw) if deg in (90, 270) else (iw, ih)
         s = pick(fw, fh, 25.4 / dpi)
         img = img.resize((max(1, int(iw * s)), max(1, int(ih * s))), Image.LANCZOS)
         if mono:
             img = img.convert("L")
-    if rot:
-        img = img.rotate(90, expand=True)
+    if deg:
+        img = img.rotate(-deg, expand=True)       # clockwise
     canvas = Image.new(img.mode, (W, H), 255 if img.mode == "L" else (255, 255, 255))
     canvas.paste(img, ((W - img.width) // 2, (H - img.height) // 2))  # larger image is cropped
     return canvas
 
 
-def sheet(f, idx, W, H, mono, mode="fit", ppmm=None, pct=100.0, num=None, rotate=True, items=None):
+def sheet(f, idx, W, H, mono, mode="fit", ppmm=None, pct=100.0, num=None, rotate=True, items=None, turn=None):
     """One printed sheet: the page, with the page number printed directly on it.
     items = free layout from the Transform tool (None / empty = the normal way)."""
     if items is not None and ppmm:
         canvas = compose_items(W, H, mono, ppmm, items)
     else:
-        canvas = compose(f, idx, W, H, mono, rotate, mode, ppmm, pct)
+        canvas = compose(f, idx, W, H, mono, rotate, mode, ppmm, pct, turn)
     if num and ppmm:
         stamp(canvas, num, ppmm)
     return canvas
@@ -1368,7 +1397,8 @@ def preview():
         if num:
             stamp(page, num, s)
     else:
-        page = sheet(f, p, AW, AH, mono, mode, s, get_pct(request.args.get("pct")), num).convert("RGB")
+        page = sheet(f, p, AW, AH, mono, mode, s, get_pct(request.args.get("pct")), num,
+                     turn=get_turn(request.args.get("turn"))).convert("RGB")
     img = Image.new("RGB", (W, H), (205, 208, 214))  # gray = area the printer cannot print on
     img.paste(page, (ox, oy))
     d = ImageDraw.Draw(img)
@@ -1586,6 +1616,7 @@ def do_print():
     profile = find_profile(d.get("printer", ""), d.get("profile"))  # None = normal way
     mode = d.get("scale") if d.get("scale") in SCALES else "fit"
     pct = get_pct(d.get("pct"))
+    turn = get_turn(d.get("turn"))
     lay = d.get("layout") if isinstance(d.get("layout"), dict) and not sheets else {}   # only sent when Transform is on
     nargs = job_numargs(d)
 
@@ -1603,7 +1634,7 @@ def do_print():
             else:
                 provider = lambda i, W, H, m: sheet(pages[i][0], pages[i][1], W, H, m, mode, W / area_mm, pct,
                                                     numspec({**nargs, "nn": i + 1} if lay else nargs, pages[i][0]["id"], pages[i][1]),
-                                                    items=page_items(i))
+                                                    items=page_items(i), turn=turn)
             printing.print_job(
                 d["printer"], d.get("paper"), color, d.get("duplex", "off"), orient, pcopies,
                 len(sheets) if sheets else len(pages), provider,
@@ -1762,6 +1793,7 @@ def save_pdf():
     color = d.get("color") == "color"
     mode = d.get("scale") if d.get("scale") in SCALES else "fit"
     pct = get_pct(d.get("pct"))
+    turn = get_turn(d.get("turn"))
     lay = d.get("layout") if isinstance(d.get("layout"), dict) else {}
     nargs = job_numargs(d)
     area_q = {"printer": d.get("printer", ""), "paper": d.get("paper"), "color": "color" if color else "mono",
@@ -1795,7 +1827,7 @@ def save_pdf():
                     else:
                         f, p, vk = pages[i]
                         num = numspec({**nargs, "nn": i + 1} if lay else nargs, f["id"], p)
-                        pg = sheet(f, p, AW, AH, not color, mode, sc, pct, num, items=page_items(i))
+                        pg = sheet(f, p, AW, AH, not color, mode, sc, pct, num, items=page_items(i), turn=turn)
                     paper = Image.new(pg.mode, (W, H), 255 if pg.mode == "L" else (255, 255, 255))
                     paper.paste(pg, (ox, oy))
                     data = encode_save_page(paper)
