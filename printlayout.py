@@ -228,6 +228,23 @@ def pick_scale(mode, W, H, fw, fh, ppmm, dpi, pct):
     return min(s, MAX_PX / max(fw, fh))
 
 
+def should_turn(w, h, aw, ah, real=None):
+    """Turn the picture 90 degrees only when that really helps.
+    real = None (fit / fill): turn only when it makes the picture clearly (15%) bigger - a nearly square picture
+           (941 x 922) is 'landscape' by 2%, turning it gains nothing and just lays the text sideways.
+    real = scale (actual size / custom %): the size is fixed, so turning is only done when the picture is cut off
+           as it is but fits when turned."""
+    if w <= 0 or h <= 0 or aw <= 0 or ah <= 0:
+        return False
+    if (w > h) == (aw > ah):
+        return False
+    if real is not None:
+        fits = w * real <= aw + 0.5 and h * real <= ah + 0.5
+        fits_turned = h * real <= aw + 0.5 and w * real <= ah + 0.5
+        return (not fits) and fits_turned
+    return min(aw / float(h), ah / float(w)) >= 1.15 * min(aw / float(w), ah / float(h))
+
+
 def compose(img, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0, dpi=300.0):
     """One picture on a white sheet of W x H pixels.
     fit: whole picture inside the area | fill: covers the area, the rest is cut | actual: real size | custom: real size x pct."""
@@ -236,7 +253,7 @@ def compose(img, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0, dpi=
     if img is None:
         return canvas
     iw, ih = img.size
-    rot = bool(rotate) and ((iw > ih) != (W > H))
+    rot = bool(rotate) and should_turn(iw, ih, W, H, (ppmm * 25.4 / dpi * (pct / 100.0 if mode == "custom" else 1.0)) if (mode in ("actual", "custom") and ppmm) else None)
     fw, fh = (ih, iw) if rot else (iw, ih)
     s = pick_scale(mode, W, H, fw, fh, ppmm, dpi, pct)
     tile = img.resize((max(1, int(iw * s)), max(1, int(ih * s))), Image.LANCZOS)
@@ -251,7 +268,7 @@ def compose(img, W, H, mono, rotate=True, mode="fit", ppmm=None, pct=100.0, dpi=
 def fit_geometry(page, aw, ah, mode, pct, rotate):
     """What compose() would draw, as a Transform picture: (w mm, h mm, rotation clockwise degrees), centred on the area."""
     nw, nh = page.natural_mm()
-    rot = bool(rotate) and ((nw > nh) != (aw > ah))
+    rot = bool(rotate) and should_turn(nw, nh, aw, ah, 1.0 if mode == "actual" else (pct / 100.0 if mode == "custom" else None))
     fw, fh = (nh, nw) if rot else (nw, nh)
     if mode == "fill":
         s = max(aw / fw, ah / fh)
