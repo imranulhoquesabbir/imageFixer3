@@ -69,6 +69,7 @@ class ImageCanvas(QWidget):
         self.page_no_fn = None                              # () -> this picture's page number (set by the Card)
         self._bare = None                     # the page WITHOUT the layers (shown instead of _img while layers are drawn live)
         self._grp, self._grp_ref = [], None    # the other selected layers (move / resize / rotate together with the open box)
+        self._live_on = False                 # show the bare page even when no layer is drawn live (all layers hidden / being moved)
         self._live = []                       # layers drawn live over it, at screen resolution: dicts img / pts / n
         self._live_small = {}
         self._src = None
@@ -153,7 +154,7 @@ class ImageCanvas(QWidget):
     # ------------------------------------------------------------ content
     def set_message(self, text):
         self._img = None
-        self._bare, self._live = None, []
+        self._bare, self._live, self._live_on = None, [], False
         self._src = None
         self._iw = self._ih = 0
         self._msg = text
@@ -162,7 +163,7 @@ class ImageCanvas(QWidget):
     def set_images(self, qimg, src):
         """New picture (or new size): show it fitted to the window."""
         self._img = qimg
-        self._bare, self._live = None, []
+        self._bare, self._live, self._live_on = None, [], False
         self._src = src
         self._iw, self._ih = qimg.width(), qimg.height()
         self._drag = None
@@ -179,7 +180,7 @@ class ImageCanvas(QWidget):
         self._img = qimg
         self._bare = bare
         if bare is None:
-            self._live = []
+            self._live, self._live_on = [], False
         if src is not None:
             self._src = src
         self.update()
@@ -978,13 +979,16 @@ class ImageCanvas(QWidget):
         """The page without its layers (None: the shown picture already has them baked in)."""
         self._bare = bare
         if bare is None:
-            self._live = []
+            self._live, self._live_on = [], False
         self.update()
 
-    def set_live(self, layers):
+    def set_live(self, layers, active=False):
         """Layers to draw over the page at screen resolution: [{'img': QImage, 'pts': [(x, y) ...] in picture pixels, 'n': n}].
         Only used while the page without layers (set_bare) is known - else the baked picture is shown as before."""
         self._live = list(layers) if (self._bare is not None and layers) else []
+        # active: every layer is hidden / is being moved by the Transform box -> `layers` is empty, but the page must still
+        # be drawn WITHOUT its layers, else the baked picture shows them again at their old place (a ghost while dragging)
+        self._live_on = self._bare is not None and (bool(layers) or bool(active))
         keep = {L["img"].cacheKey() for L in self._live}
         self._live_small = {k: v for k, v in self._live_small.items() if k[0] in keep}
         self.update()
@@ -1040,7 +1044,7 @@ class ImageCanvas(QWidget):
                 p.drawRect(QRectF(m.x() - 4, m.y() - 4, 8, 8))
 
     def _disp(self):
-        return self._bare if (self._live and self._bare is not None) else self._img
+        return self._bare if (self._live_on and self._bare is not None) else self._img
 
     def _small(self, img, want):
         """The layer picture shrunk (area filter) to about the size it is shown at: thin strokes stay sharp."""

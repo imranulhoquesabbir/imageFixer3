@@ -3048,7 +3048,7 @@ class Card(QWidget):
                 return
         if self._live_cache:
             self._live_cache = {k: v for k, v in self._live_cache.items() if any(x["id"] == k for x in self.layers)}
-        cv.set_live(live)
+        cv.set_live(live, active=bool(self.layers))
         cv.set_group(ents)
 
     def _compute(self):
@@ -6029,7 +6029,10 @@ class Card(QWidget):
 
         def make(progress):
             feather = max(1.5, 0.08 * size) if kind == "brush" else 2.0
-            return core.erase_region(base, get_mask(), offset, feather, ink)
+            clipm = None
+            if sel is not None:                      # selection = hard wall: not one pixel outside it may change
+                clipm = Image.fromarray(np.clip(core.resize_mask(sel, base.size) * 255.0, 0, 255).astype(np.uint8))
+            return core.erase_region(base, get_mask(), offset, feather, ink, clipm)
         if self.ctx is not None:                     # inside a picture layer: erased = transparent
             alpha = self.alpha
             self._edit_base("Erasing", lambda progress: base,

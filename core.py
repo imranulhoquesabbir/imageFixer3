@@ -1559,7 +1559,7 @@ def _grow_over_halo(reg, hole, reach=26):
     gx = np.abs(np.diff(g, axis=1, prepend=g[:, :1]))
     gy = np.abs(np.diff(g, axis=0, prepend=g[:1, :]))
     smooth = np.maximum(gx, gy) < 45.0
-    cand = (dev > thr) & smooth & near
+    cand = (dev > thr) & (dev < 150.0) & smooth & near      # a faint halo only: solid dark ink is never 'halo'
     cur = h0
     for _ in range(reach):
         grow = np.asarray(Image.fromarray((cur * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3))) > 127
@@ -1598,10 +1598,12 @@ def _refine_valid(reg, valid, F):
     return v2.astype(np.float32) if float((v2 > 0.5).sum()) > 0.25 * float(ok.sum()) else valid
 
 
-def erase_region(img, mask, offset=None, feather=1.5, keep_ink=False):
+def erase_region(img, mask, offset=None, feather=1.5, keep_ink=False, clip=None):
     """Removes what is under the mask and puts there what surrounds it, so it looks as if nothing was there.
     offset=(dx,dy): copy from that spot instead (clone / heal): the texture comes from (x+dx, y+dy),
-    the brightness and colour are matched to the surroundings."""
+    the brightness and colour are matched to the surroundings.
+    clip = optional PIL 'L' mask (same size as img): NOTHING outside it is ever changed (used for the selection).
+    Whatever the hole-growing steps do, the result is also never allowed to reach more than ~3 px past the drawn mask."""
     hard = mask.point(lambda v: 255 if v > 16 else 0)
     bbox = hard.getbbox()
     if bbox is None:
@@ -1675,6 +1677,13 @@ def erase_region(img, mask, offset=None, feather=1.5, keep_ink=False):
         else:
             wc = _writing_color(reg, F, np.asarray(hbox) > 127)
             res = _keep_dark_ink(reg, hbox, res, wc)
+    # hard limit: the hole-growing steps (ink / halo) must never spread far away from what the user really painted
+    lim = np.asarray(hard.crop(box).filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(0.8)),
+                     dtype=np.float32) / 255.0
+    soft = soft * np.clip(lim, 0, 1)[..., None]
+    if clip is not None:                                     # selection: strictly nothing outside it changes
+        cm = clip if clip.size == img.size else clip.resize(img.size)
+        soft = soft * (np.asarray(cm.crop(box), dtype=np.float32) / 255.0)[..., None]
     out = reg.astype(np.float32) * (1 - soft) + res * soft
     result = img.copy()
     result.paste(Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8)), (box[0], box[1]))
