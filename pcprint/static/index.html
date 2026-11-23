@@ -601,6 +601,11 @@ button,select,input{transition:background-color .15s,border-color .15s,box-shado
       </div>
       <input id="pctr" type="range" min="10" max="300" step="5" value="100" hidden style="width:100%">
       <p class="mut" id="scnote"></p>
+      <div class="row" style="margin-top:8px">
+        <button id="turnbtn" type="button" title="Turn the picture 90° clockwise every time you press it (0° / 90° / 180° / 270°). Keys: R = turn, Shift+R = back"><svg class="ic i-rotate" aria-hidden="true"><use href="#i-rotate"/></svg> Rotate picture <b id="turnval">0°</b> <kbd style="font:600 10px ui-monospace,Consolas,monospace;border:1px solid #888;border-radius:4px;padding:0 4px">R</kbd></button>
+        <label class="row" style="gap:4px" title="When the picture is wide and the paper is tall, turn it only if it then prints clearly bigger. Switch off to print the picture exactly as it is."><input type="checkbox" id="turnauto" checked> <span class="name">Auto-turn to fit</span></label>
+      </div>
+      <p class="mut" id="turnnote"></p>
       <div class="row" style="justify-content:space-between;margin-top:6px" title="Print several pages on one sheet (2 = half size, 4 = quarter size ...)">
         <span class="name">Many pages on one sheet</span><input type="checkbox" id="nupon" class="sw"></div>
       <div id="nupbox" hidden style="margin-top:6px">
@@ -656,6 +661,15 @@ button,select,input{transition:background-color .15s,border-color .15s,box-shado
 <div id="tfflash" role="status" aria-live="polite"></div>
 <script>
 const $=s=>document.querySelector(s);
+const TURN={deg:0,auto:true};   // Rotate picture: deg = turned by hand (clockwise), auto = turn a wide picture by itself when that makes it clearly bigger
+const turnVal=()=>TURN.deg?TURN.deg:(TURN.auto?'auto':0);   // what the server gets: 'auto' | 0 | 90 | 180 | 270
+function turnUI(){
+  const b=$('#turnval');if(!b)return;
+  b.textContent=TURN.deg+'\u00b0';
+  $('#turnauto').checked=TURN.auto;$('#turnauto').disabled=!!TURN.deg;
+  $('#turnnote').textContent=TURN.deg?`Picture turned ${TURN.deg}\u00b0 clockwise, whatever the paper is. Press again to go on; at 0\u00b0 it is not turned.`
+    :(TURN.auto?'Auto-turn: a wide picture is turned only if it then prints clearly bigger.':'The picture is printed exactly as it is.');
+}
 let FILES=[],REV=-1,CAPS=null,STEP=1,SREV=-1,PRN={},prT=null;
 const DESEL=new Set();               // pages the user unticked: "fileId:pageIndex"
 const GONE=new Set();                // pages removed with the red cross (kept on the server so the phone follows)
@@ -1034,6 +1048,9 @@ function applyPrn(){
   if(s.nupOn!==undefined)NUP.on=!!s.nupOn&&!tfActive();
   if(s.scale)setScale(s.scale);
   if(s.pct)setPct(s.pct);
+  if(s.turnDeg!==undefined)TURN.deg=((+s.turnDeg||0)%360+360)%360;
+  if(s.turnAuto!==undefined)TURN.auto=!!s.turnAuto;
+  turnUI();
   nupUI();
 }
 async function applyPrnAll(){
@@ -1046,7 +1063,7 @@ function savePrn(e){
   PRN=e&&e.target&&e.target.id==='printer'?{printer:$('#printer').value}:
     {printer:$('#printer').value,paper:$('#paper').value,orient:$('#orient').value,color:$('#color').value,
      duplex:$('#duplex').value,copies:$('#copies').value,scale:$('#scale').value,pct:$('#pct').value,
-     nupOn:NUP.on,nupN:NUP.n};
+     nupOn:NUP.on,nupN:NUP.n,turnDeg:TURN.deg,turnAuto:TURN.auto};
   clearTimeout(prT);prT=setTimeout(()=>{prT=null;api('/api/settings',{method:'POST',headers:JH,body:JSON.stringify({prn:PRN})})},400);
 }
 ['change','input'].forEach(ev=>$('#setp').addEventListener(ev,e=>{if(!['profile','pnumon'].includes(e.target.id))savePrn(e)}));
@@ -1303,6 +1320,13 @@ $('#pctp').onclick=()=>{setPct((parseFloat($('#pct').value)||100)+5);pvRefresh()
 setScale('fit');
 $('#scale').onchange=()=>setScale($('#scale').value);
 
+function turnStep(d){   // Rotate picture: the button and the R / Shift+R keys
+  if(nupN()>1)return toast('Turning a picture is not available while "Many pages on one sheet" is on.');
+  TURN.deg=(((TURN.deg+d)%360)+360)%360;turnUI();savePrn();if(STEP===2)pvRefresh();
+}
+$('#turnbtn').onclick=()=>turnStep(90);
+$('#turnauto').onchange=()=>{TURN.auto=$('#turnauto').checked;turnUI()};   // (runs before the panel-wide handler that saves + refreshes)
+turnUI();
 function orient(){
   const v=$('#orient').value;if(v!=='auto')return v;
   const s=selPages()[0];return s&&s.land?'landscape':'portrait';
@@ -1310,7 +1334,7 @@ function orient(){
 function params(){
   const pp=CAPS&&CAPS.papers?CAPS.papers.find(x=>x.name===$('#paper').value):null;
   return new URLSearchParams({printer:$('#printer').value,paper:$('#paper').value,color:$('#color').value,
-    duplex:CAPS&&CAPS.duplex?$('#duplex').value:'off',orient:orient(),scale:$('#scale').value,pct:setPct($('#pct').value),
+    duplex:CAPS&&CAPS.duplex?$('#duplex').value:'off',orient:orient(),scale:$('#scale').value,pct:setPct($('#pct').value),turn:turnVal(),
     w:(pp&&pp.w)||210,h:(pp&&pp.h)||297}).toString()+numQS()+(HQ?'&hq=1':'');
 }
 
@@ -1456,7 +1480,7 @@ function buildJob(s){
   const copies=Math.max(1,Math.min(99,parseInt($('#copies').value)||1));
   const body={printer:$('#printer').value,paper:$('#paper').value,color:$('#color').value,
     duplex:CAPS&&CAPS.duplex?$('#duplex').value:'off',orient:orient(),copies,
-    profile:$('#profile').value||'',scale:$('#scale').value,pct:setPct($('#pct').value),
+    profile:$('#profile').value||'',scale:$('#scale').value,pct:setPct($('#pct').value),turn:turnVal(),
     w:(pp&&pp.w)||210,h:(pp&&pp.h)||297,
     num:NUM,pages:s.map(p=>[p.f,p.p]),title:jobTitle(s),nup:nupN()};
   if(nupN()===1&&tfActive()){   // free layout from the Transform tool (kept even when the Transform button is switched off)
@@ -2247,10 +2271,11 @@ async function pageRotate(deg){
   TFSCROLL=$('#pvstage').scrollTop;pvRender();
 }
 
-document.addEventListener('keydown',e=>{   // Transform off: R / Shift+R turns the page under the mouse
+document.addEventListener('keydown',e=>{   // Transform off: R / Shift+R = the Rotate picture button (works after clicking a dropdown too)
   if(TF.on||STEP!==2||PC.open)return;
-  const t=e.target;if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)&&t.type!=='checkbox')return;
-  if(e.key.toLowerCase()==='r'&&!e.ctrlKey&&!e.altKey&&!e.metaKey){e.preventDefault();pageRotate(e.shiftKey?-90:90)}
+  const t=e.target;
+  if(t&&(t.tagName==='TEXTAREA'||t.isContentEditable||(t.tagName==='INPUT'&&!['checkbox','button','range','radio'].includes(t.type))))return;
+  if(e.key.toLowerCase()==='r'&&!e.ctrlKey&&!e.altKey&&!e.metaKey){e.preventDefault();turnStep(e.shiftKey?-90:90)}
 });
 
 /* ---- put another picture on the same page: drop, paste, or the Add button ---- */
