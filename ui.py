@@ -1609,6 +1609,7 @@ class MainWindow(QMainWindow):
         c.saveAllRequested.connect(self.save_all)
         c.pdfAllRequested.connect(self.save_all_pdf)
         c.applyAllRequested.connect(self.apply_to_all)
+        c.applyTabRequested.connect(self.apply_tab_to_all)
         c.message.connect(self.say)
         self.carousel.add_card(c)
         it = QListWidgetItem(self._label(c))
@@ -1722,6 +1723,19 @@ class MainWindow(QMainWindow):
             c.apply_action(act)
         self._refresh_counts()
         self.say("Last setting (%s) applied to %d other picture(s). Crop, erase and other edits were not touched."
+                 % (act["label"], len(others)))
+
+    def apply_tab_to_all(self, card, tab):
+        """The 'Apply ... to all pictures' button of a tab (Adjust / Color / Shadow / Text): copies every setting of that tab."""
+        others = [c for c in self.carousel.cards if c is not card]
+        if not others:
+            self.say("There is no other picture yet.")
+            return
+        act = card.tab_action(tab)
+        for c in others:
+            c.apply_action(act)
+        self._refresh_counts()
+        self.say("All %s settings applied to %d other picture(s). Crop, erase and other edits were not touched."
                  % (act["label"], len(others)))
 
     def _card(self, uid):

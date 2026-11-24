@@ -146,6 +146,11 @@ LOOK_TITLES = {"bright": "Brightness", "contrast": "Contrast", "sat": "Saturatio
                "white": "Whiten paper", "black": "Darken text",
                "sharp": "Text sharpness", "objs": "Line & shape sharpness", "detail": "Faint strokes",
                "dark": "Text darkness", "clear": "Clean specks"}
+# 'Apply this tab to all pictures': the settings each tab owns (the whole tab is copied, not only the last slider)
+TAB_LOOK_KEYS = {"adjust": ("bright", "contrast", "sat", "vib", "hue", "warm"),
+                 "text": ("sharp", "objs", "detail", "dark", "clear"),
+                 "shadow": ("flat", "flat_size", "shlift", "white", "black", "news", "news_keep")}
+TAB_TITLES = {"adjust": "Adjust", "color": "Color", "shadow": "Shadow", "text": "Text"}
 SHAPES = {"erase_brush": "brush", "erase_rect": "rect", "erase_ellipse": "ellipse", "erase_lasso": "lasso"}
 ROUND_KEYS = ("crop_round", "crop", "rect", "erase_rect")      # tools whose box can have round corners (on / off + roundness)
 
@@ -835,6 +840,7 @@ class Card(QWidget):
     saveAllRequested = Signal()
     pdfAllRequested = Signal()
     applyAllRequested = Signal(object)
+    applyTabRequested = Signal(object, str)          # (card, "adjust" | "color" | "shadow" | "text")
     message = Signal(str)
     exportReady = Signal()
 
@@ -1073,6 +1079,19 @@ class Card(QWidget):
             outer.addWidget(t)
         outer.addWidget(body)
         return f, l
+
+    def _tab_apply_btn(self, tab, text):
+        """The 'apply this tab to all pictures' button at the bottom of a tab."""
+        btn = QPushButton(text)
+        btn.setIcon(_ico("apply", 16, normal="#ffffff"))
+        btn.setMinimumHeight(34)
+        btn.setToolTip("Copies ALL the settings of this tab (every slider on it) from this picture to all the other pictures.\n"
+                       "Crop, erase, move ... and the other tabs are never touched.")
+        btn.clicked.connect(lambda _c=False, t=tab: self.applyTabRequested.emit(self, t))
+        if not hasattr(self, "_tab_apply_btns"):
+            self._tab_apply_btns = []
+        self._tab_apply_btns.append(btn)
+        return btn
 
     def _scope_label(self):
         box = QWidget()
@@ -1771,6 +1790,7 @@ class Card(QWidget):
         gl.addWidget(self._look_row("warm", "Warmth", -100, 100, ("cooler", "", "warmer"),
                                     "Cooler = bluer, warmer = more yellow / red.", ""))
         lay.addWidget(g)
+        lay.addWidget(self._tab_apply_btn("adjust", "Apply Adjust to all pictures"))
         lay.addStretch(1)
         self.stackPages.addWidget(pg)
 
@@ -1842,6 +1862,7 @@ class Card(QWidget):
         self.grpPicked = g3
         gl3.addWidget(self.colors)
         lay.addWidget(g3)
+        lay.addWidget(self._tab_apply_btn("color", "Apply picked colors to all pictures"))
         lay.addStretch(1)
         self.stackPages.addWidget(pg)
         self.btnFill.clicked.connect(self.fill_selection)
@@ -1971,6 +1992,7 @@ class Card(QWidget):
             lay.addWidget(w_)
         self.shSeg.idClicked.connect(sh_page)
         sh_page(0)
+        lay.addWidget(self._tab_apply_btn("shadow", "Apply Shadow to all pictures"))
         lay.addStretch(1)
         self.stackPages.addWidget(pg)
 
@@ -1993,6 +2015,7 @@ class Card(QWidget):
         self.btnClarityReset.clicked.connect(self._reset_clarity)
         gl.addWidget(self.btnClarityReset)
         lay.addWidget(g)
+        lay.addWidget(self._tab_apply_btn("text", "Apply Text to all pictures"))
         lay.addStretch(1)
         self.stackPages.addWidget(pg)
 
@@ -5216,6 +5239,16 @@ class Card(QWidget):
             self.tintGroup.blockSignals(False)
 
     # ------------------------------------------- settings shared by all pictures
+    def tab_action(self, tab):
+        """Everything one tab (adjust / color / shadow / text) holds, as one 'apply to all' action."""
+        if tab == "color":
+            return {"kind": "adjs", "adjs": copy.deepcopy(self.adjs), "label": "colors"}
+        vals = {k: int(self.look[k]) for k in TAB_LOOK_KEYS[tab]}
+        if tab == "shadow":
+            return {"kind": "tab_shadow", "values": vals, "opts": dict(self.shadow_opts),
+                    "shadow": bool(self._shadow_done), "label": "Shadow"}
+        return {"kind": "tab_look", "values": vals, "label": TAB_TITLES[tab]}
+
     def apply_action(self, act):
         """'Apply last setting to all': copies only the LAST changed setting from another picture (never crop, erase ...)."""
         k = act["kind"]
@@ -5228,6 +5261,13 @@ class Card(QWidget):
             elif k == "shadow":
                 st["shadow_opts"] = dict(act["opts"])
                 st["shadow"] = True
+            elif k == "tab_look":
+                st["look"].update(act["values"])
+            elif k == "tab_shadow":
+                st["look"].update(act["values"])
+                st["shadow_opts"] = dict(act["opts"])
+                if act["shadow"]:
+                    st["shadow"] = True
             self._pending = st
             self._touch()
             return
@@ -5247,6 +5287,21 @@ class Card(QWidget):
             self.shadow_opts = dict(act["opts"])
             self._sync_sliders()
             self._auto_shadow()
+        elif k == "tab_look":
+            self._checkpoint()
+            self.look.update(act["values"])
+            self._sync_sliders()
+            self._timer.start()
+            self._touch()
+        elif k == "tab_shadow":
+            self._checkpoint()
+            self.look.update(act["values"])
+            self.shadow_opts = dict(act["opts"])
+            self._sync_sliders()
+            self._timer.start()
+            self._touch()
+            if act["shadow"]:                          # the one-click shadow removal was used: do it here too
+                self._auto_shadow()
 
     def settings(self):
         return {"adjs": copy.deepcopy(self.adjs), "look": dict(self.look), "shadow_opts": dict(self.shadow_opts),
