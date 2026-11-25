@@ -17,9 +17,9 @@ import time
 
 import numpy as np
 from PIL import Image, ImageOps
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtCore import QRectF, QTimer, Qt, Signal
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDialog, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                               QHBoxLayout, QLabel, QProgressBar, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
 from PySide6.QtGui import QColor, QImageReader, QPainter, QPen, QPixmap
 
 import idpreview
@@ -260,8 +260,20 @@ class IdUploadDialog(QDialog):
         self._busy = False
         self._loading = True
 
-        v = QVBoxLayout(self)
+        outer = QVBoxLayout(self)                       # the options scroll when the screen is small; the buttons stay in view
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._body = QWidget()
+        v = QVBoxLayout(self._body)
+        v.setContentsMargins(0, 0, 8, 0)
         v.setSpacing(8)
+        self._scroll.setWidget(self._body)
+        outer.addWidget(self._scroll, 1)
+        foot = QVBoxLayout()
+        foot.setSpacing(8)
+        outer.addLayout(foot)
 
         # ---------------------------------------------------------------- 1. pictures
         v.addWidget(_section("1   Pictures"))
@@ -357,15 +369,17 @@ class IdUploadDialog(QDialog):
         # ---------------------------------------------------------------- go
         self.chkPreview = QCheckBox("Show a preview before the page is made")
         v.addWidget(self.chkPreview)
+        self.chkClose = QCheckBox("Close this window when the page is made")
+        v.addWidget(self.chkClose)
         self.lblMsg = QLabel("")
         self.lblMsg.setWordWrap(True)
-        v.addWidget(self.lblMsg)
+        foot.addWidget(self.lblMsg)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(8)
         self.bar.hide()
-        v.addWidget(self.bar)
+        foot.addWidget(self.bar)
         r = QHBoxLayout()
         self.btnGo = QPushButton("Make the ID card page")
         self.btnGo.setProperty("accent", True)
@@ -377,15 +391,17 @@ class IdUploadDialog(QDialog):
         self.btnClose.clicked.connect(self.close)
         r.addWidget(self.btnGo, 2)
         r.addWidget(self.btnClose, 1)
-        v.addLayout(r)
+        foot.addLayout(r)
 
         self._load()
-        for sig in (self.chkOne.toggled, self.chkBorder.toggled, self.chkRound.toggled, self.chkPreview.toggled,
+        for sig in (self.chkOne.toggled, self.chkBorder.toggled, self.chkRound.toggled, self.chkPreview.toggled, self.chkClose.toggled,
                     self.sldBorder.valueChanged, self.sldRound.valueChanged, self.spW.valueChanged, self.spH.valueChanged,
                     self.cmbCrop.changed, self.cmbSize.changed, self.cmbPage.changed, self.cmbPlace.changed):
             sig.connect(self._changed)
         self._loading = False
         self._paint()
+        for sig in (self.chkOne.toggled, self.cmbSize.changed):          # the window gets taller / shorter with its content
+            sig.connect(lambda *_: QTimer.singleShot(0, self._fit_screen))
 
     # ------------------------------------------------------------------ settings (saved at every change)
     def _load(self):
@@ -402,6 +418,7 @@ class IdUploadDialog(QDialog):
             self.cmbPlace.set_data(str(st.value("scan/place", "center")))
             self.chkOne.setChecked(st.value("idup/one", False, type=bool))
             self.chkPreview.setChecked(st.value("scan/preview", True, type=bool))
+            self.chkClose.setChecked(st.value("idup/autoclose", True, type=bool))
             self.chkBorder.setChecked(st.value("scan/border_on", True, type=bool))
             self._bcolor = str(st.value("scan/border_color", idscan.BORDER_COLOR, type=str) or idscan.BORDER_COLOR)
             self.sldBorder.setValue(max(1, min(40, int(st.value("scan/border_w", idscan.BORDER_W) or idscan.BORDER_W))))
@@ -424,6 +441,7 @@ class IdUploadDialog(QDialog):
         s.setValue("scan/page", self.cmbPage.currentData())
         s.setValue("scan/place", self.cmbPlace.currentData())
         s.setValue("scan/preview", self.chkPreview.isChecked())
+        s.setValue("idup/autoclose", self.chkClose.isChecked())
         s.setValue("scan/border_on", self.chkBorder.isChecked())
         s.setValue("scan/border_color", self._bcolor)
         s.setValue("scan/border_w", int(self.sldBorder.value()))
@@ -484,8 +502,26 @@ class IdUploadDialog(QDialog):
             self._load()
             self._paint()
         self.show()
+        self._fit_screen()
         self.raise_()
         self.activateWindow()
+
+    def _fit_screen(self):
+        """Open at the height the content needs, but never taller / wider than the screen (the taskbar is left free), and keep
+        the whole window inside the screen."""
+        scr = (self.screen() if self.isVisible() else None) or self.win.screen() or QApplication.primaryScreen()
+        ag = scr.availableGeometry()                     # the screen without the taskbar
+        maxh, maxw = int(ag.height() * 0.94), int(ag.width() * 0.94)
+        self.setMinimumWidth(min(620, maxw))
+        self.setMaximumSize(maxw, maxh)
+        fixed = self.sizeHint().height() - self._scroll.sizeHint().height()
+        want = fixed + self._body.sizeHint().height() + 6
+        w = min(max(self.minimumWidth(), self.width() if self.isVisible() else 640), maxw)
+        self.resize(w, min(want, maxh))
+        fg = self.frameGeometry()
+        x = min(max(fg.x(), ag.x()), max(ag.x(), ag.right() - fg.width()))
+        y = min(max(fg.y(), ag.y()), max(ag.y(), ag.bottom() - fg.height()))
+        self.move(x, y)
 
     def _set_path(self, side, p):
         if not p or not os.path.isfile(p):
@@ -685,4 +721,6 @@ class IdUploadDialog(QDialog):
             self.win.scan_id_page(path, items, border, rpct)
             self.lblMsg.setText("ID card page is ready (%s are layers). You can make the next one." %
                                 ("front and back" if back is not None else "front"))
+            if self.chkClose.isChecked():
+                QTimer.singleShot(700, self.close)
         self._bg = jobs.run_background(work, done, lambda m: self._fail(m), self._prog)
