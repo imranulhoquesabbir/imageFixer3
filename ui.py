@@ -2677,7 +2677,7 @@ class MainWindow(QMainWindow):
         self._current_changed(self.carousel.index)
         card.ensure_loaded()
         card.add_fixed_layers(items, border, round_pct)
-        self.say("ID card page ready: Front and Back are layers (Layers tab). Border colour / thickness / corner roundness: Border tab.")
+        self.say("ID card page ready: Front and Back are layers (Layers tab). Border, shadow, corner roundness: Style tab.")
 
     # --------------------------------------------------------------- phone
     def open_phone(self):

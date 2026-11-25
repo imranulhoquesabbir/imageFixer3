@@ -2546,6 +2546,78 @@ def _apply_border(out, border, shape_alpha=None):
     return Image.fromarray(arr, "RGBA")
 
 
+# ------------------------------------------------------------------------------------------ layer shadow
+# Drop shadow of a layer (picture, QR, ID card, text box ...): ((r, g, b), strength 0..1, softness 0..1, distance 0..1,
+# direction in degrees) or None.  Sizes are relative to the layer's long side, so a small logo gets a small shadow.
+# 0 degrees = shadow falls to the right, 90 = down (same direction on the page whatever the layer's turn).
+SHADOW_DEFAULTS = {"color": "#000000", "opacity": 55, "blur": 30, "dist": 20, "angle": 45}
+SH_BLUR_K = 0.05            # softness 100 % = blur sigma of 5 % of the layer's long side
+SH_DIST_K = 0.08            # distance 100 % = 8 % of the layer's long side
+
+
+def make_shadow(on=True, color="#000000", opacity=55, blur=30, dist=20, angle=45):
+    """Settings -> the 'shadow' of a layer (hashable tuple), or None (no shadow)."""
+    if not on:
+        return None
+    try:
+        c = str(color).lstrip("#")
+        rgb = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+    except Exception:
+        rgb = (0, 0, 0)
+    try:
+        return (rgb, max(0, min(100, int(opacity))) / 100.0, max(0, min(100, int(blur))) / 100.0,
+                max(0, min(100, int(dist))) / 100.0, float(angle) % 360.0)
+    except Exception:
+        return None
+
+
+def _page_glow(part, shadow, ref):
+    """Blurred, coloured copy of the alpha of 'part' (RGBA), padded on every side.  Softness is measured against
+    'ref' (the layer's long side in pixels).  Returns (PIL RGBA, pad)."""
+    w, h = part.size
+    sigma = shadow[2] * SH_BLUR_K * ref
+    pad = int(min(3000, math.ceil(3.0 * sigma) + 3))
+    a = np.zeros((h + 2 * pad, w + 2 * pad), np.uint8)
+    a[pad:pad + h, pad:pad + w] = np.asarray(part.getchannel("A"), np.uint8)
+    if sigma > 0.3:
+        try:
+            import cv2
+            a = cv2.GaussianBlur(a, (0, 0), sigma)
+        except Exception:
+            a = np.asarray(Image.fromarray(a).filter(_PilFilter.GaussianBlur(sigma)))
+    a = np.clip(a.astype(np.float32) * shadow[1] + 0.5, 0, 255).astype(np.uint8)
+    out = np.zeros(a.shape + (4,), np.uint8)
+    out[..., 0], out[..., 1], out[..., 2] = shadow[0]
+    out[..., 3] = a
+    return Image.fromarray(out, "RGBA"), pad
+
+
+def shadow_glow(rgba, shadow):
+    """Shadow of a layer picture WITHOUT offset (offset is added when it is drawn).  Returns (PIL RGBA, pad)."""
+    return _page_glow(rgba, shadow, float(max(rgba.size)))
+
+
+def apply_shadow_page(full, shadow, ref):
+    """'full' = ONE layer already placed on a page-sized RGBA picture.  Returns it with its shadow underneath."""
+    W, H = full.size
+    box = full.getchannel("A").getbbox()
+    if box is None or ref < 1.0:
+        return full
+    ang = math.radians(shadow[4])
+    d = shadow[3] * SH_DIST_K * ref
+    dx, dy = int(round(math.cos(ang) * d)), int(round(math.sin(ang) * d))
+    glow, pad = _page_glow(full.crop(box), shadow, float(ref))
+    out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    out.paste(glow, (box[0] - pad + dx, box[1] - pad + dy))
+    return Image.alpha_composite(out, full)
+
+
+def _layer_ref_px(grid, n):
+    """The layer's long side on the page (pixels)."""
+    return max(math.dist(grid[0], grid[n]), math.dist(grid[0], grid[n * (n + 1)]),
+               math.dist(grid[n * (n + 1)], grid[-1]), math.dist(grid[n], grid[-1]))
+
+
 ROUND_SHAPE_MAX = 400
 
 
@@ -2631,7 +2703,13 @@ def composite_layers(base, layers, hide=None, keep_alpha=False):
         elif patch.width < tw * 1.05 and tw < 9000:           # shown LARGER than its pixels: upscale it with a good filter first
             up = int(tw * 1.5)
             patch = patch.resize((up, max(1, int(round(up * patch.height / patch.width)))), Image.Resampling.LANCZOS)
-        out = Image.alpha_composite(out, warp_layer_hq(patch, (W, H), grid, n))
+        full = warp_layer_hq(patch, (W, H), grid, n)
+        if l.get("shadow"):
+            try:
+                full = apply_shadow_page(full, l["shadow"], _layer_ref_px(grid, n))
+            except Exception:
+                pass
+        out = Image.alpha_composite(out, full)
     return out if keep_alpha else out.convert("RGB")
 
 
@@ -2654,7 +2732,7 @@ def composite_layers_fast(base, layers, hide=None, cache=None):
         lid = l["id"]
         alive.add(lid)
         refs = (l["rgb"], l["a"], l.get("pend"))
-        sig = ((W, H), tuple(l["grid"]), l["n"], l.get("opacity", 100), l.get("border"), l.get("rnd", 0), id(refs[0]), id(refs[1]), id(refs[2]))
+        sig = ((W, H), tuple(l["grid"]), l["n"], l.get("opacity", 100), l.get("border"), l.get("shadow"), l.get("rnd", 0), id(refs[0]), id(refs[1]), id(refs[2]))
         with _LCACHE_LOCK:
             hit = cache.get(lid)
         if hit is not None and hit[0] == sig:
@@ -2671,6 +2749,11 @@ def composite_layers_fast(base, layers, hide=None, cache=None):
                 up = int(tw * 1.5)
                 patch = patch.resize((up, max(1, int(round(up * patch.height / patch.width)))), Image.Resampling.LANCZOS)
             full = warp_layer_hq(patch, (W, H), grid, n)
+            if l.get("shadow"):
+                try:
+                    full = apply_shadow_page(full, l["shadow"], _layer_ref_px(grid, n))
+                except Exception:
+                    pass
             box = full.getchannel("A").getbbox()
             patch = full.crop(box) if box is not None else None
             with _LCACHE_LOCK:

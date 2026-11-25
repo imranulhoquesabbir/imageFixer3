@@ -738,6 +738,12 @@ class ImageCanvas(QWidget):
         n = t["n"]
         w, h = t["w"], t["h"]
         wp = [self.to_wid(q) for q in t["pts"]]
+        sh = getattr(t["img"], "_shadow", None)
+        if sh and t.get("layer"):
+            p.save()
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            self._paint_shadow(p, sh, wp[0], wp[n], wp[n * (n + 1)], wp[-1])
+            p.restore()
         if n > 1 and self._paint_warp_remap(p, t, wp, n):
             pass                                          # Warp drawn as ONE picture (like Photoshop): no pieces, no seams
         else:
@@ -1055,6 +1061,27 @@ class ImageCanvas(QWidget):
             self._live_small[key] = hit
         return hit
 
+    def _paint_shadow(self, p, sh, a, b, c, d):
+        """Drop shadow of a layer, drawn BEFORE the layer.  sh = {img: blurred picture, pad, dist (fraction of the long
+        side), ang (degrees)}.  a, b, c, d = the layer's corners on the widget (top-left, top-right, bottom-left, bottom-right)."""
+        try:
+            img, pad = sh["img"], int(sh["pad"])
+            w, h = float(img.width()), float(img.height())
+            ref = max(math.hypot(a.x() - b.x(), a.y() - b.y()), math.hypot(a.x() - c.x(), a.y() - c.y()),
+                      math.hypot(c.x() - d.x(), c.y() - d.y()), math.hypot(b.x() - d.x(), b.y() - d.y()))
+            off = float(sh["dist"]) * ref
+            dx, dy = math.cos(math.radians(sh["ang"])) * off, math.sin(math.radians(sh["ang"])) * off
+            sq = [(pad, pad), (w - pad, pad), (w - pad, h - pad), (pad, h - pad)]
+            dq = [(a.x() + dx, a.y() + dy), (b.x() + dx, b.y() + dy), (d.x() + dx, d.y() + dy), (c.x() + dx, c.y() + dy)]
+            H = core.homography(sq, dq)
+            p.save()
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            p.setTransform(QTransform(H[0, 0], H[1, 0], H[2, 0], H[0, 1], H[1, 1], H[2, 1], H[0, 2], H[1, 2], H[2, 2]))
+            p.drawImage(QRectF(0, 0, w, h), img, QRectF(0, 0, w, h))
+            p.restore()
+        except Exception:
+            pass
+
     def _paint_live(self, p, layers=None):
         p.save()
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -1064,6 +1091,9 @@ class ImageCanvas(QWidget):
             img, n = L["img"], L["n"]
             wp = [self.to_wid(QPointF(x, y)) for x, y in L["pts"]]
             a, b, c, d = wp[0], wp[n], wp[n * (n + 1)], wp[-1]
+            sh = L.get("shadow") or getattr(img, "_shadow", None)
+            if sh:
+                self._paint_shadow(p, sh, a, b, c, d)
             tw = max(math.hypot(a.x() - b.x(), a.y() - b.y()), math.hypot(c.x() - d.x(), c.y() - d.y()))
             want = int(tw * dpr)
             if want >= 8 and img.width() > want * 1.3:

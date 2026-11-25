@@ -35,6 +35,7 @@ DEFAULT_STYLE = {
     "outline": False, "outline_color": "#ffffff", "outline_w": 6,
     "shadow": False, "shadow_color": "#000000", "shadow_blur": 8, "shadow_dist": 8, "shadow_op": 60,
     "hl": False, "hl_color": "#fff2a8",
+    "box": False, "box_color": "#111111", "box_w": 4,            # a frame round the whole text box
 }
 STYLE_KEYS = tuple(DEFAULT_STYLE)
 
@@ -318,6 +319,12 @@ def render(t, page_w, page_h, u=None):
     W, H = max(1, int(math.ceil(lw * s))), max(1, int(math.ceil(lh * s)))
 
     def draw_text(p):
+        if t.get("box"):                                 # frame round the text box (inside the picture; its shadow follows)
+            bw = float(t.get("box_w", 4)) * 0.5
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(t.get("box_color", "#111111")), bw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap,
+                          Qt.PenJoinStyle.MiterJoin))
+            p.drawRect(QRectF(bw / 2.0, bw / 2.0, lw - bw, lh - bw))
         if ow > 0:
             _doc(t, text, margin, t["outline_color"], width, (t["outline_color"], 2.0 * ow), runs).drawContents(p)
         _doc(t, text, margin, t["color"], width, runs=runs).drawContents(p)
@@ -471,7 +478,8 @@ def margin_of(t):
     """The empty border (layout units) round the text inside the picture."""
     ow = float(t["outline_w"]) if t["outline"] else 0.0
     reach = (float(t["shadow_dist"]) + 2.0 * float(t["shadow_blur"])) if t["shadow"] else 0.0
-    return 4.0 + ow + reach + (14.0 if t["hl"] else 0.0)
+    bx = (float(t.get("box_w", 4)) * 0.5 + 4.0) if t.get("box") else 0.0
+    return 4.0 + ow + reach + (14.0 if t["hl"] else 0.0) + bx
 
 
 class ScriptHighlighter(QSyntaxHighlighter):
@@ -694,14 +702,14 @@ class TextPanel(QWidget):
         root.addWidget(g)
 
         # ---- effects
-        g, gl = group_box("Outline, shadow, highlight", collapsed=True)
-        self.chkOutline = QCheckBox("Outline")
-        self.swOutline = _Swatch("#ffffff", "Outline color")
+        g, gl = group_box("Stroke, shadow, frame, highlight", collapsed=False)
+        self.chkOutline = QCheckBox("Stroke  (outline round the letters)")
+        self.swOutline = _Swatch("#ffffff", "Stroke color")
         r = QHBoxLayout()
         r.addWidget(self.chkOutline, 1)
         r.addWidget(self.swOutline)
         gl.addLayout(r)
-        self.rowOutW = SliderRow("Outline width", 1, 40, 6, ("thin", "", "thick"), "", unit="")
+        self.rowOutW = SliderRow("Stroke width", 1, 40, 6, ("thin", "", "thick"), "", unit="")
         gl.addWidget(self.rowOutW)
         self.chkShadow = QCheckBox("Shadow")
         self.swShadow = _Swatch("#000000", "Shadow color")
@@ -714,6 +722,14 @@ class TextPanel(QWidget):
         self.rowShOp = SliderRow("Shadow strength", 0, 100, 60, ("faint", "", "dark"), "")
         for w in (self.rowShBlur, self.rowShDist, self.rowShOp):
             gl.addWidget(w)
+        self.chkBox = QCheckBox("Box outline  (frame round the whole text box)")
+        self.swBox = _Swatch("#111111", "Box outline color")
+        r = QHBoxLayout()
+        r.addWidget(self.chkBox, 1)
+        r.addWidget(self.swBox)
+        gl.addLayout(r)
+        self.rowBoxW = SliderRow("Box outline width", 1, 20, 4, ("thin", "", "thick"), "", unit="")
+        gl.addWidget(self.rowBoxW)
         self.chkHl = QCheckBox("Highlight (colored box behind the text)")
         self.swHl = _Swatch("#fff2a8", "Highlight color")
         r = QHBoxLayout()
@@ -766,6 +782,9 @@ class TextPanel(QWidget):
         self.rowShBlur.changed.connect(lambda v: e(shadow_blur=int(v)))
         self.rowShDist.changed.connect(lambda v: e(shadow_dist=int(v)))
         self.rowShOp.changed.connect(lambda v: e(shadow_op=int(v)))
+        self.chkBox.toggled.connect(lambda on: e(box=bool(on)))
+        self.swBox.colorChanged.connect(lambda c: e(box_color=c, box=True))
+        self.rowBoxW.changed.connect(lambda v: e(box_w=int(v)))
         self.chkHl.toggled.connect(lambda on: e(hl=bool(on)))
         self.swHl.colorChanged.connect(lambda c: e(hl_color=c, hl=True))
         self.btnAddFont.clicked.connect(self._add_font)
@@ -887,6 +906,9 @@ class TextPanel(QWidget):
             self.rowShBlur.set_value(int(t["shadow_blur"]))
             self.rowShDist.set_value(int(t["shadow_dist"]))
             self.rowShOp.set_value(int(t["shadow_op"]))
+            self.chkBox.setChecked(bool(t.get("box", False)))
+            self.swBox.set_color(t.get("box_color", "#111111"))
+            self.rowBoxW.set_value(int(t.get("box_w", 4)))
             self.chkHl.setChecked(bool(t["hl"]))
             self.swHl.set_color(t["hl_color"])
         finally:

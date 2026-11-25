@@ -257,7 +257,7 @@ class CornerPreview(QWidget):
 
 GROUP_ICONS = (("Color & light", "adjust"), ("Color range", "color"), ("Remove a stamp", "erase"), ("Picked colors", "dropper"),
                ("One-click shadow", "shadow"), ("Manual shadow", "brush"), ("Text & line", "textfix"),
-               ("Newspaper", "picture"), ("Background of", "picture"), ("Border", "border"), ("Card corners", "crop"),
+               ("Newspaper", "picture"), ("Background of", "picture"), ("Border", "border"), ("Drop shadow", "shadow"), ("Card corners", "crop"),
                ("Layers", "layers"), ("Pictures on this page", "layers"))
 
 
@@ -1748,7 +1748,7 @@ class Card(QWidget):
         self.tabGroup = QButtonGroup(self)
         self.tabGroup.setExclusive(True)
         self.stackPages = QStackedWidget()
-        names = ("Adjust", "Color", "Shadow", "Text", "Picture", "Aa", "Layers", "Border", "Numbers")
+        names = ("Adjust", "Color", "Shadow", "Text", "Picture", "Aa", "Layers", "Style", "Numbers")
         for i, n in enumerate(names):
             b = QPushButton(n)
             b.setCheckable(True)
@@ -1761,9 +1761,9 @@ class Card(QWidget):
                 b.setToolTip("All pictures and text boxes on the page: drag up / down to change which one is in front")
             elif n == "Numbers":
                 b.setToolTip("Page numbers for Print and \"All pages as one PDF\" (same setting as in the print screen)")
-            elif n == "Border":
-                b.setToolTip("Add / remove a border on the selected layer(s) and choose its colour and thickness.\n"
-                             "Only this tab changes a border: brightness, sharpness, shadow removal ... never touch it.")
+            elif n == "Style":
+                b.setToolTip("Look of the selected layer(s): border, drop shadow (so it pops out of the page) and round corners.\n"
+                             "Only this tab changes them: brightness, sharpness, shadow removal ... never touch them.")
             _style_btn(b, ("adjust", "color", "shadow", "textfix", "picture", "aa", "layers", "border", "hash")[i], n,
                        "", label=("Textbox" if n == "Aa" else n), size=18, extra_tip=b.toolTip())
             b.setProperty("tab", True)
@@ -2212,6 +2212,51 @@ class Card(QWidget):
         hb.setWordWrap(True)
         gl.addWidget(hb)
         lay.addWidget(g)
+        # ---- drop shadow of the selected layer(s): picture, QR, ID card, text box
+        gs, gsl = self._group_box("Drop shadow", collapsible=False)
+        self._shadow_sync = False
+        self._sh_hex = core.SHADOW_DEFAULTS["color"]
+        self.lblShadowFor = QLabel("")
+        self.lblShadowFor.setObjectName("hint")
+        self.lblShadowFor.setWordWrap(True)
+        gsl.addWidget(self.lblShadowFor)
+        self.chkShadowOn = QCheckBox("Show a shadow  (switch off = remove the shadow)")
+        gsl.addWidget(self.chkShadowOn)
+        srow2 = QHBoxLayout()
+        srow2.setSpacing(6)
+        self.btnShColor = QPushButton()
+        self.btnShColor.setFixedSize(40, 30)
+        self.btnShColor.setToolTip("Shadow colour. Click to choose another colour.")
+        self.edShHex = QLineEdit()
+        self.edShHex.setFixedWidth(84)
+        self.edShHex.setMaxLength(7)
+        self.edShHex.setToolTip("Colour as #RRGGBB")
+        srow2.addWidget(QLabel("Colour"))
+        srow2.addWidget(self.btnShColor)
+        srow2.addWidget(self.edShHex)
+        srow2.addStretch(1)
+        gsl.addLayout(srow2)
+        self.shOpRow = SliderRow("Strength", 0, 100, core.SHADOW_DEFAULTS["opacity"], ("faint", "", "dark"),
+                                 "How dark the shadow is.", "")
+        self.shBlurRow = SliderRow("Softness", 0, 100, core.SHADOW_DEFAULTS["blur"], ("sharp", "", "soft"),
+                                   "How blurry the edge of the shadow is (relative to the size of the layer).", "")
+        self.shDistRow = SliderRow("Distance", 0, 100, core.SHADOW_DEFAULTS["dist"], ("near", "", "far"),
+                                   "How far the shadow is pushed away from the layer (relative to the size of the layer).", "")
+        self.shAngRow = SliderRow("Direction", 0, 360, core.SHADOW_DEFAULTS["angle"], ("right", "down", "left"),
+                                  "Where the shadow falls: 0 = right, 90 = down, 180 = left, 270 = up.\n"
+                                  "It stays the same on the page when the layer is turned.", "")
+        for w_ in (self.shOpRow, self.shBlurRow, self.shDistRow, self.shAngRow):
+            gsl.addWidget(w_)
+        self.btnShadowAll = QPushButton("Use this shadow on ALL layers")
+        self.btnShadowAll.setToolTip("Puts the shadow you see here on every picture / text box of the page\n"
+                                     "(with 'Show a shadow' switched off it removes the shadow from all of them).")
+        gsl.addWidget(self.btnShadowAll)
+        hs = QLabel("Works on pictures, QR codes, ID cards and text boxes (the shadow follows the shape of the layer, "
+                    "also its round corners and see-through parts). Select a layer, then switch the shadow on.")
+        hs.setObjectName("info")
+        hs.setWordWrap(True)
+        gsl.addWidget(hs)
+        lay.addWidget(gs)
         # ---- corners of an ID card layer: round on / off + how round
         g2, g2l = self._group_box("Card corners", collapsible=False)
         self._round_sync = False
@@ -2250,6 +2295,14 @@ class Card(QWidget):
         self.borderRow.changed.connect(lambda v: self._border_changed("width"))
         self.btnBorderAll.clicked.connect(self._border_all)
         self._paint_border_swatch()
+        self.chkShadowOn.toggled.connect(lambda _=False: self._shadow_changed("on"))
+        self.btnShColor.clicked.connect(self._pick_shadow_color)
+        self.edShHex.editingFinished.connect(self._shadow_hex_edited)
+        for r_ in (self.shOpRow, self.shBlurRow, self.shDistRow, self.shAngRow):
+            r_.changed.connect(lambda v: self._shadow_changed("val"))
+        self.btnShadowAll.clicked.connect(self._shadow_all)
+        self._paint_shadow_swatch()
+        self._shadow_enable_ui()
 
         # ---------------- Numbers tab: page numbers (one setting, shared with the print screen)
         pg, lay = self._page()
@@ -3062,7 +3115,7 @@ class Card(QWidget):
         """The layer's picture for drawing on screen: big (sharp when zoomed in), kept until the layer changes."""
         if self._live_cache is None:
             self._live_cache = {}
-        sig = (id(l["rgb"]), id(l["a"]), l.get("opacity", 100), l.get("border"), l.get("rnd", 0))
+        sig = (id(l["rgb"]), id(l["a"]), l.get("opacity", 100), l.get("border"), l.get("shadow"), l.get("rnd", 0))
         hit = self._live_cache.get(l["id"])
         if hit is not None and hit[0] == sig:
             return hit[2]
@@ -3072,6 +3125,7 @@ class Card(QWidget):
             rgba = rgba.resize((max(1, int(rgba.width * f)), max(1, int(rgba.height * f))), Image.Resampling.LANCZOS)
         arr = np.ascontiguousarray(np.asarray(rgba))
         qi = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format.Format_RGBA8888).copy()
+        self._attach_shadow(qi, l, rgba)
         self._live_cache[l["id"]] = (sig, (l["rgb"], l["a"]), qi)     # (the objects are kept so their ids stay unique)
         return qi
 
@@ -4615,13 +4669,34 @@ class Card(QWidget):
             self._end_layer_session()                  # empty place: the picture is deselected
             self._refresh_layers_ui()
 
+    @staticmethod
+    def _attach_shadow(qi, l, rgba):
+        """The layer's drop shadow goes with its picture (qi._shadow): the canvas draws it behind the layer, on the page
+        and while the layer is being moved / resized / turned."""
+        sh = l.get("shadow")
+        if not sh:
+            return
+        try:
+            small = rgba
+            f = min(1.0, 900.0 / max(rgba.size))
+            if f < 1.0:                                   # the blur is made on a smaller copy (same relative look)
+                small = rgba.resize((max(1, int(rgba.width * f)), max(1, int(rgba.height * f))), Image.Resampling.BILINEAR)
+            glow, pad = core.shadow_glow(small, sh)
+            arr = np.ascontiguousarray(np.asarray(glow))
+            gq = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format.Format_RGBA8888).copy()
+            qi._shadow = {"img": gq, "pad": pad, "dist": sh[3] * core.SH_DIST_K, "ang": sh[4]}
+        except Exception:
+            _log("layer shadow")
+
     def _layer_qimage(self, l):
         rgba = core.layer_rgba(l, pend=False)
         f = min(1.0, 900.0 / max(rgba.size))
         if f < 1.0:
             rgba = rgba.resize((max(1, int(rgba.width * f)), max(1, int(rgba.height * f))), Image.Resampling.LANCZOS)
         arr = np.ascontiguousarray(np.asarray(rgba))
-        return QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format.Format_RGBA8888).copy()
+        qi = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format.Format_RGBA8888).copy()
+        self._attach_shadow(qi, l, rgba)
+        return qi
 
     def rotate_key(self, deg_ccw):
         """R: the selected picture turns 90° (right), with nothing selected the whole page does."""
@@ -4894,7 +4969,101 @@ class Card(QWidget):
         self._set_border([l["id"] for l in self.layers], self._border_state())
         self._notify("border", "Border on every layer" if self.chkBorderOn.isChecked() else "Border removed from every layer", "")
 
-    # ---- corner roundness of ID card layers (Border tab)
+    # ---- drop shadow of layers (Style tab)
+    def _shadow_state(self):
+        return core.make_shadow(self.chkShadowOn.isChecked(), self._sh_hex, self.shOpRow.value(), self.shBlurRow.value(),
+                                self.shDistRow.value(), self.shAngRow.value())
+
+    def _paint_shadow_swatch(self):
+        self.btnShColor.setStyleSheet("background: %s; border-radius: 7px; border: 1px solid #4a5268;" % self._sh_hex)
+        self.edShHex.setText(self._sh_hex)
+
+    def _shadow_enable_ui(self):
+        on = self.chkShadowOn.isChecked()
+        for w in (self.btnShColor, self.edShHex, self.shOpRow, self.shBlurRow, self.shDistRow, self.shAngRow):
+            w.setEnabled(on)
+
+    def _pick_shadow_color(self):
+        c = QColorDialog.getColor(QColor(self._sh_hex), self, "Shadow colour")
+        if c.isValid():
+            self._sh_hex = c.name()
+            self._paint_shadow_swatch()
+            self.chkShadowOn.blockSignals(True)
+            self.chkShadowOn.setChecked(True)
+            self.chkShadowOn.blockSignals(False)
+            self._shadow_changed("color")
+
+    def _shadow_hex_edited(self):
+        t = self.edShHex.text().strip()
+        if not t.startswith("#"):
+            t = "#" + t
+        if len(t) == 7 and all(ch in "0123456789abcdefABCDEF" for ch in t[1:]):
+            self._sh_hex = t.lower()
+            self._paint_shadow_swatch()
+            self._shadow_changed("color")
+        else:
+            self.edShHex.setText(self._sh_hex)
+
+    def _shadow_changed(self, what):
+        """what = "on" | "color" | "val".  The shadow of the selected layer(s) changes (one Undo step; a slider drag is one step)."""
+        if self._shadow_sync:
+            return
+        self._shadow_enable_ui()
+        ids = self._border_targets()
+        if not ids or not self._loaded:
+            return
+        if what == "val":
+            self._begin_change()
+        else:
+            self._checkpoint("Shadow")
+        self._set_shadow(ids, self._shadow_state())
+
+    def _set_shadow(self, ids, sh):
+        ids = set(ids)
+        self.layers = [dict(l, shadow=sh) if l["id"] in ids else l for l in self.layers]
+        self.ops += 1
+        self._touch()
+        self._sync_live()
+        self._timer.start()
+        pid = self._place_id
+        if self._tool == "transform" and pid in ids and self._layer(pid) is not None:
+            self.canvas.set_tf_image(self._layer_qimage(self._layer(pid)))
+
+    def _shadow_all(self):
+        if not self.layers or not self._loaded:
+            return
+        self._checkpoint("Shadow")
+        self._set_shadow([l["id"] for l in self.layers], self._shadow_state())
+        self._notify("shadow", "Shadow on every layer" if self.chkShadowOn.isChecked() else "Shadow removed from every layer", "")
+
+    def _sync_shadow_ui(self):
+        """The Drop shadow controls show the shadow of the selected layer (the first one)."""
+        ids = self._border_targets()
+        self._shadow_sync = True
+        try:
+            ls = [self._layer(i) for i in ids]
+            sh = ls[0].get("shadow") if ls else None
+            if sh:
+                (r, g, bl), op, blur, dist, ang = sh
+                self._sh_hex = "#%02x%02x%02x" % (r, g, bl)
+                self.shOpRow.set_value(int(round(op * 100)))
+                self.shBlurRow.set_value(int(round(blur * 100)))
+                self.shDistRow.set_value(int(round(dist * 100)))
+                self.shAngRow.set_value(int(round(ang)) % 361)
+            self.chkShadowOn.setChecked(bool(sh))
+            if ls:
+                names = ", ".join(l["name"] for l in ls[:3]) + (" +%d more" % (len(ls) - 3) if len(ls) > 3 else "")
+                self.lblShadowFor.setText("Shadow of:  %s%s" % (names, "  (shows the first one)" if len(ls) > 1 else ""))
+            else:
+                self.lblShadowFor.setText("No layer is selected: click a picture or text box (Layers tab or on the page) to give it a shadow.")
+            self._paint_shadow_swatch()
+        finally:
+            self._shadow_sync = False
+        self._shadow_enable_ui()
+        self.chkShadowOn.setEnabled(bool(ids))
+        self.btnShadowAll.setEnabled(bool(self.layers))
+
+    # ---- corner roundness of ID card layers (Style tab)
     @staticmethod
     def _round_pref():
         """(on, percent) the next ID card scan will use (shared with the Scan window)."""
@@ -5071,6 +5240,7 @@ class Card(QWidget):
             self._border_sync = False
         self._border_enable_ui()
         self.btnBorderAll.setEnabled(bool(self.layers))
+        self._sync_shadow_ui()
         self._sync_round_ui()
         self._sync_layer_opacity_ui()
 
