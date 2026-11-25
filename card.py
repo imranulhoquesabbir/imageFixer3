@@ -2728,7 +2728,7 @@ class Card(QWidget):
             self._go_move()
         import resizedlg
         base, alpha = self.base, self.alpha
-        got = resizedlg.ResizeDialog(base.size, self.window()).run()
+        got = resizedlg.ResizeDialog(base.size, self.window(), image=base).run()
         if got is None:
             return
         w, h, dpi = got
