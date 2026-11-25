@@ -17,10 +17,10 @@ import time
 
 import numpy as np
 from PIL import Image, ImageOps
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
-                               QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout)
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                               QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QImageReader, QPainter, QPen, QPixmap
 
 import idpreview
 import idscan
@@ -31,10 +31,9 @@ import valuedit
 PICS = "Pictures (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)"
 AUTO_OK_SCORE = 0.6                          # same limits as the Auto crop (card.py)
 AUTO_OK_EDGE = 0.6
-CROP_MODES = (("Auto crop, then show me the 4 corners to check", "check"),
-              ("Auto crop, ask me only when it is not sure", "sure"),
-              ("Already cropped: do not crop", "none"))
-SIZES = (("Smart NID / ID-1  (85.6 x 54 mm)", "id1"), ("Custom size (mm)", "custom"))
+SEG_QSS = ("QPushButton { background: rgba(128,128,160,0.14); border: 1px solid rgba(128,128,160,0.35); border-radius: 7px; padding: 6px 10px; }"
+           "QPushButton:hover { border-color: #7c83ff; }"
+           "QPushButton:checked { background: #5b5bd6; border-color: #7c83ff; color: white; font-weight: 600; }")
 
 
 def _area_frac(q, size):
@@ -90,6 +89,162 @@ def guess_quad(img, mode, want):
     return (qa if qa is not None else idscan.whole_quad(img)), False
 
 
+class Seg(QWidget):
+    """A row of buttons, one of them chosen (like a switch with 2-3 positions).  data() = the chosen value."""
+    changed = Signal()
+
+    def __init__(self, items, tips=None):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self._grp = QButtonGroup(self)
+        self._grp.setExclusive(True)
+        self._data = []
+        for i, (text, data) in enumerate(items):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(SEG_QSS)
+            if tips:
+                b.setToolTip(tips[i])
+            self._grp.addButton(b, i)
+            lay.addWidget(b, 1)
+            self._data.append(data)
+        self._grp.idClicked.connect(lambda _i: self.changed.emit())
+        self._grp.button(0).setChecked(True)
+
+    def data(self):
+        return self._data[max(0, self._grp.checkedId())]
+
+    currentData = data
+
+    def set_data(self, d):
+        i = self._data.index(d) if d in self._data else 0
+        self._grp.button(i).setChecked(True)
+
+
+class PicCard(QFrame):
+    """One big box for one picture: click it or drop a file on it; shows the picture so you know it is the right one."""
+    clicked = Signal()
+    dropped = Signal(str)
+
+    def __init__(self, title, hint):
+        super().__init__()
+        self.setObjectName("piccard")
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("#piccard { border: 1.5px dashed #5b6384; border-radius: 10px; background: rgba(128,128,160,0.08); }"
+                           "#piccard:hover { border-color: #7c83ff; }")
+        self.setMinimumHeight(150)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+        self.lblTitle = QLabel(title)
+        self.lblTitle.setStyleSheet("font-weight: 700; letter-spacing: 1px; border: none; background: transparent;")
+        self.lblPic = QLabel(hint)
+        self.lblPic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lblPic.setStyleSheet("border: none; background: transparent; color: #8a93b2;")
+        self.lblPic.setMinimumHeight(96)
+        self.lblName = QLabel("")
+        self.lblName.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lblName.setStyleSheet("border: none; background: transparent;")
+        v.addWidget(self.lblTitle)
+        v.addWidget(self.lblPic, 1)
+        v.addWidget(self.lblName)
+        self._hint = hint
+
+    def set_title(self, t):
+        self.lblTitle.setText(t)
+
+    def set_path(self, p):
+        if not p:
+            self.lblPic.setPixmap(QPixmap())
+            self.lblPic.setText(self._hint)
+            self.lblName.setText("")
+            return
+        self.lblName.setText(os.path.basename(p))
+        try:
+            r = QImageReader(p)
+            r.setAutoTransform(True)
+            sz = r.size()
+            if sz.isValid():
+                sz.scale(260, 110, Qt.AspectRatioMode.KeepAspectRatio)
+                r.setScaledSize(sz)
+            img = r.read()
+            if img.isNull():
+                raise ValueError("unreadable")
+            self.lblPic.setPixmap(QPixmap.fromImage(img))
+        except Exception:
+            self.lblPic.setPixmap(QPixmap())
+            self.lblPic.setText("(no preview)")
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            if u.isLocalFile():
+                self.dropped.emit(u.toLocalFile())
+                break
+
+
+class PagePreview(QWidget):
+    """The page as it will come out: A4 / A5 shape, the cards where they will be, with the chosen border and corners."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(170, 236)
+        self.cfg = dict(page="A4", place="center", size=idscan.ID1_MM, two=True, border=True, color="#878787", bw=6, rnd=100)
+
+    def set(self, **kw):
+        self.cfg.update(kw)
+        self.update()
+
+    def paintEvent(self, _e):
+        c = self.cfg
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pw, ph = idscan.PAGES_MM.get(c["page"], idscan.PAGES_MM["A4"])
+        W, H = self.width() - 10, self.height() - 10
+        k = min(W / pw, H / ph)
+        x0, y0 = (self.width() - pw * k) / 2.0, (self.height() - ph * k) / 2.0
+        p.setPen(QPen(QColor("#4a5268"), 1))
+        p.setBrush(QColor("#ffffff"))
+        p.drawRect(QRectF(x0, y0, pw * k, ph * k))
+        cl, cs = max(c["size"]), min(c["size"])
+        f = min(1.0, pw * 0.9 / cl)
+        cw, ch = cl * f, cs * f
+        n = 2 if c["two"] else 1
+        gap = 8.0
+        total = ch * n + gap * (n - 1)
+        y = 15.0 if c["place"] == "top" else max(0.0, (ph - total) / 2.0)
+        rad = idscan.CORNER_MM / 85.6 * cl * f * (c["rnd"] / 100.0) * k
+        for i in range(n):
+            r = QRectF(x0 + (pw - cw) / 2.0 * k, y0 + y * k, cw * k, ch * k)
+            if c["border"]:
+                p.setPen(QPen(QColor(c["color"]), max(1.0, cw * k * c["bw"] / 1000.0)))
+            else:
+                p.setPen(QPen(QColor("#c4cadb"), 0.5))
+            p.setBrush(QColor("#e3e8f5"))
+            p.drawRoundedRect(r, rad, rad) if rad > 0.5 else p.drawRect(r)
+            p.setPen(QColor("#6b7390"))
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, "Front" if i == 0 else "Back")
+            y += ch + gap
+        p.end()
+
+
+def _section(text):
+    l = QLabel(text)
+    l.setStyleSheet("font-weight: 700; font-size: 13px; padding-top: 4px;")
+    return l
+
+
 class IdUploadDialog(QDialog):
     def __init__(self, win):
         super().__init__(win)
@@ -97,7 +252,7 @@ class IdUploadDialog(QDialog):
         self.st = win.settings
         self.setWindowTitle("ID card from files")
         self.setModal(False)
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
         self.work = tempfile.mkdtemp(prefix="idup_", dir=win.tmp)
         self._bcolor = idscan.BORDER_COLOR
         self._paths = {"front": "", "back": ""}
@@ -106,104 +261,102 @@ class IdUploadDialog(QDialog):
         self._loading = True
 
         v = QVBoxLayout(self)
-        t = QLabel("Choose the FRONT and the BACK picture (a phone photo, a saved scan ...). They are cut out, made real size and "
-                   "put on one page, as two layers.")
-        t.setWordWrap(True)
-        v.addWidget(t)
+        v.setSpacing(8)
 
-        # ---- files
-        self.lblFront = QLabel("")
-        self.lblBack = QLabel("")
-        self.btnFront = QPushButton("Front ...")
-        self.btnBack = QPushButton("Back ...")
-        self.btnFront.clicked.connect(lambda: self._choose("front"))
-        self.btnBack.clicked.connect(lambda: self._choose("back"))
-        for b in (self.btnFront, self.btnBack):
-            b.setMinimumWidth(90)
-        self.chkOne = QCheckBox("Front and Back are in ONE picture (cut both out of it)")
-        self.chkOne.setToolTip("For a picture / page that has the front card above (or beside) the back card.\n"
-                               "Both are found and cut out; check the corners of each.")
-        r = QHBoxLayout()
-        r.addWidget(self.btnFront)
-        r.addWidget(self.lblFront, 1)
-        v.addLayout(r)
-        r = QHBoxLayout()
-        r.addWidget(self.btnBack)
-        r.addWidget(self.lblBack, 1)
-        v.addLayout(r)
+        # ---------------------------------------------------------------- 1. pictures
+        v.addWidget(_section("1   Pictures"))
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.cardFront = PicCard("FRONT", "Click here or drop the picture")
+        self.cardBack = PicCard("BACK", "Click here or drop the picture")
+        self.cardFront.clicked.connect(lambda: self._choose("front"))
+        self.cardBack.clicked.connect(lambda: self._choose("back"))
+        self.cardFront.dropped.connect(lambda p: self._set_path("front", p))
+        self.cardBack.dropped.connect(lambda p: self._set_path("back", p))
+        row.addWidget(self.cardFront, 1)
+        row.addWidget(self.cardBack, 1)
+        v.addLayout(row)
+        self.chkOne = QCheckBox("Both sides are in ONE picture (cut both cards out of it)")
+        self.chkOne.setToolTip("For a picture / page that has the front card above (or beside) the back card.")
         v.addWidget(self.chkOne)
 
-        # ---- crop + card size
+        # ---------------------------------------------------------------- 2. page + look (with the live page picture)
+        v.addWidget(_section("2   Page and look"))
+        mid = QHBoxLayout()
+        mid.setSpacing(14)
         form = QFormLayout()
-        self.cmbCrop = QComboBox()
-        for text, key in CROP_MODES:
-            self.cmbCrop.addItem(text, key)
-        self.cmbCrop.setToolTip("How the card is cut out of the picture.\n'Already cropped' = the picture is just the card.")
-        form.addRow("Crop", self.cmbCrop)
-        self.cmbSize = QComboBox()
-        for text, key in SIZES:
-            self.cmbSize.addItem(text, key)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.cmbPage = Seg((("A4", "A4"), ("A5", "A5")))
+        self.cmbPlace = Seg((("Centre", "center"), ("Top", "top")), ("The cards in the middle of the page", "The cards at the top of the page"))
+        form.addRow("Page", self.cmbPage)
+        form.addRow("Position", self.cmbPlace)
+        self.cmbSize = Seg((("NID  85.6 x 54 mm", "id1"), ("Custom size", "custom")),
+                           ("Smart NID / bank card size (ID-1)", "Type the width and height of the card yourself"))
+        form.addRow("Card size", self.cmbSize)
         self.spW = QDoubleSpinBox()
         self.spH = QDoubleSpinBox()
         for sp in (self.spW, self.spH):
             sp.setRange(20.0, 400.0)
             sp.setDecimals(1)
             sp.setSuffix(" mm")
-        self.spW.setValue(idscan.ID1_MM[0])
-        self.spH.setValue(idscan.ID1_MM[1])
         self.spW.setToolTip("Long side of the card")
         self.spH.setToolTip("Short side of the card")
-        r = QHBoxLayout()
-        r.addWidget(self.cmbSize, 2)
-        r.addWidget(self.spW, 1)
-        r.addWidget(QLabel("x"))
-        r.addWidget(self.spH, 1)
-        form.addRow("Card size", r)
-        self.cmbPage = QComboBox()
-        for p in ("A4", "A5"):
-            self.cmbPage.addItem(p, p)
-        self.cmbPlace = QComboBox()
-        self.cmbPlace.addItem("centre of the page", "center")
-        self.cmbPlace.addItem("top of the page", "top")
-        r = QHBoxLayout()
-        r.addWidget(self.cmbPage, 1)
-        r.addWidget(self.cmbPlace, 2)
-        form.addRow("Page", r)
-        v.addLayout(form)
-
-        # ---- border + corners (the same settings as the Scan window and the Border tab)
+        self.rowCustom = QWidget()
+        rc = QHBoxLayout(self.rowCustom)
+        rc.setContentsMargins(0, 0, 0, 0)
+        rc.addWidget(self.spW, 1)
+        rc.addWidget(QLabel("x"))
+        rc.addWidget(self.spH, 1)
+        self.lblCustom = QLabel("")
+        form.addRow(self.lblCustom, self.rowCustom)
         self.chkBorder = QCheckBox("Border")
         self.btnBorderColor = QPushButton()
         self.btnBorderColor.setFixedSize(34, 24)
+        self.btnBorderColor.setToolTip("Border colour")
         self.btnBorderColor.clicked.connect(self._pick_border_color)
         self.sldBorder = QSlider(Qt.Orientation.Horizontal)
         self.sldBorder.setRange(1, 40)
+        self.sldBorder.setToolTip("How thick the border is")
         self.lblBorderW = QLabel("")
-        self.lblBorderW.setMinimumWidth(24)
+        self.lblBorderW.setMinimumWidth(28)
         valuedit.attach(self.lblBorderW, self.sldBorder)
-        r = QHBoxLayout()
-        r.addWidget(self.chkBorder)
-        r.addWidget(self.btnBorderColor)
-        r.addWidget(self.sldBorder, 1)
-        r.addWidget(self.lblBorderW)
-        v.addLayout(r)
+        rb = QHBoxLayout()
+        rb.addWidget(self.btnBorderColor)
+        rb.addWidget(self.sldBorder, 1)
+        rb.addWidget(self.lblBorderW)
+        form.addRow(self.chkBorder, rb)
         self.chkRound = QCheckBox("Round corners")
         self.sldRound = QSlider(Qt.Orientation.Horizontal)
         self.sldRound.setRange(5, idscan.ROUND_MAX)
+        self.sldRound.setToolTip("100% = the corner of a real card, less = sharper, more = rounder")
         self.lblRoundV = QLabel("")
         self.lblRoundV.setMinimumWidth(40)
         valuedit.attach(self.lblRoundV, self.sldRound)
-        self.sampleRound = idpreview.CornerSample(w=48)
-        r = QHBoxLayout()
-        r.addWidget(self.chkRound)
-        r.addWidget(self.sldRound, 1)
-        r.addWidget(self.lblRoundV)
-        r.addWidget(self.sampleRound)
-        v.addLayout(r)
+        rr = QHBoxLayout()
+        rr.addWidget(self.sldRound, 1)
+        rr.addWidget(self.lblRoundV)
+        form.addRow(self.chkRound, rr)
+        mid.addLayout(form, 1)
+        self.preview = PagePreview()
+        mid.addWidget(self.preview, 0, Qt.AlignmentFlag.AlignTop)
+        v.addLayout(mid)
+
+        # ---------------------------------------------------------------- 3. cutting
+        v.addWidget(_section("3   Cutting the card out"))
+        self.cmbCrop = Seg((("Auto + check corners", "check"), ("Auto", "sure"), ("Already cropped", "none")),
+                           ("Finds the card, then shows the 4 corners so you can fix them", "Finds the card; asks you only when it is not sure",
+                            "The picture is just the card: nothing is cut"))
+        v.addWidget(self.cmbCrop)
+        self.lblCropHint = QLabel("")
+        self.lblCropHint.setWordWrap(True)
+        self.lblCropHint.setStyleSheet("color: #8a93b2;")
+        v.addWidget(self.lblCropHint)
+
+        # ---------------------------------------------------------------- go
         self.chkPreview = QCheckBox("Show a preview before the page is made")
         v.addWidget(self.chkPreview)
-
-        # ---- go
         self.lblMsg = QLabel("")
         self.lblMsg.setWordWrap(True)
         v.addWidget(self.lblMsg)
@@ -217,8 +370,10 @@ class IdUploadDialog(QDialog):
         self.btnGo = QPushButton("Make the ID card page")
         self.btnGo.setProperty("accent", True)
         self.btnGo.setDefault(True)
+        self.btnGo.setMinimumHeight(36)
         self.btnGo.clicked.connect(self._go)
         self.btnClose = QPushButton("Close")
+        self.btnClose.setMinimumHeight(36)
         self.btnClose.clicked.connect(self.close)
         r.addWidget(self.btnGo, 2)
         r.addWidget(self.btnClose, 1)
@@ -227,35 +382,31 @@ class IdUploadDialog(QDialog):
         self._load()
         for sig in (self.chkOne.toggled, self.chkBorder.toggled, self.chkRound.toggled, self.chkPreview.toggled,
                     self.sldBorder.valueChanged, self.sldRound.valueChanged, self.spW.valueChanged, self.spH.valueChanged,
-                    self.cmbCrop.currentIndexChanged, self.cmbSize.currentIndexChanged, self.cmbPage.currentIndexChanged,
-                    self.cmbPlace.currentIndexChanged):
+                    self.cmbCrop.changed, self.cmbSize.changed, self.cmbPage.changed, self.cmbPlace.changed):
             sig.connect(self._changed)
         self._loading = False
         self._paint()
 
     # ------------------------------------------------------------------ settings (saved at every change)
-    def _combo_set(self, cmb, key, default):
-        i = cmb.findData(self.st.value(key, default))
-        cmb.setCurrentIndex(max(0, i))
-
     def _load(self):
         """Also called when the window is shown again: the Scan window / Border tab may have changed the shared settings."""
         was = self._loading
         self._loading = True
         try:
-            self._combo_set(self.cmbCrop, "idup/crop", "check")
-            self._combo_set(self.cmbSize, "idup/size", "id1")
-            self.spW.setValue(float(self.st.value("idup/w", idscan.ID1_MM[0]) or idscan.ID1_MM[0]))
-            self.spH.setValue(float(self.st.value("idup/h", idscan.ID1_MM[1]) or idscan.ID1_MM[1]))
-            self._combo_set(self.cmbPage, "scan/page", "A4")
-            self._combo_set(self.cmbPlace, "scan/place", "center")
-            self.chkOne.setChecked(self.st.value("idup/one", False, type=bool))
-            self.chkPreview.setChecked(self.st.value("scan/preview", True, type=bool))
-            self.chkBorder.setChecked(self.st.value("scan/border_on", True, type=bool))
-            self._bcolor = str(self.st.value("scan/border_color", idscan.BORDER_COLOR, type=str) or idscan.BORDER_COLOR)
-            self.sldBorder.setValue(max(1, min(40, int(self.st.value("scan/border_w", idscan.BORDER_W) or idscan.BORDER_W))))
-            self.chkRound.setChecked(self.st.value("scan/round_on", True, type=bool))
-            self.sldRound.setValue(max(5, min(idscan.ROUND_MAX, int(self.st.value("scan/round_pct", idscan.ROUND_PCT) or idscan.ROUND_PCT))))
+            st = self.st
+            self.cmbCrop.set_data(str(st.value("idup/crop", "check")))
+            self.cmbSize.set_data(str(st.value("idup/size", "id1")))
+            self.spW.setValue(float(st.value("idup/w", idscan.ID1_MM[0]) or idscan.ID1_MM[0]))
+            self.spH.setValue(float(st.value("idup/h", idscan.ID1_MM[1]) or idscan.ID1_MM[1]))
+            self.cmbPage.set_data(str(st.value("scan/page", "A4")))
+            self.cmbPlace.set_data(str(st.value("scan/place", "center")))
+            self.chkOne.setChecked(st.value("idup/one", False, type=bool))
+            self.chkPreview.setChecked(st.value("scan/preview", True, type=bool))
+            self.chkBorder.setChecked(st.value("scan/border_on", True, type=bool))
+            self._bcolor = str(st.value("scan/border_color", idscan.BORDER_COLOR, type=str) or idscan.BORDER_COLOR)
+            self.sldBorder.setValue(max(1, min(40, int(st.value("scan/border_w", idscan.BORDER_W) or idscan.BORDER_W))))
+            self.chkRound.setChecked(st.value("scan/round_on", True, type=bool))
+            self.sldRound.setValue(max(5, min(idscan.ROUND_MAX, int(st.value("scan/round_pct", idscan.ROUND_PCT) or idscan.ROUND_PCT))))
         except Exception:
             pass
         self._loading = was
@@ -281,28 +432,34 @@ class IdUploadDialog(QDialog):
 
     def _paint(self):
         custom = self.cmbSize.currentData() == "custom"
-        self.spW.setEnabled(custom)
-        self.spH.setEnabled(custom)
+        self.rowCustom.setVisible(custom)
+        self.lblCustom.setText("Width x height" if custom else "")
         if not custom:
-            self.spW.blockSignals(True)
-            self.spH.blockSignals(True)
-            self.spW.setValue(idscan.ID1_MM[0])
-            self.spH.setValue(idscan.ID1_MM[1])
-            self.spW.blockSignals(False)
-            self.spH.blockSignals(False)
+            for sp, val in ((self.spW, idscan.ID1_MM[0]), (self.spH, idscan.ID1_MM[1])):
+                sp.blockSignals(True)
+                sp.setValue(val)
+                sp.blockSignals(False)
         one = self.chkOne.isChecked()
-        self.btnBack.setEnabled(not one)
-        self.btnFront.setText("Picture ..." if one else "Front ...")
-        self.lblFront.setText(os.path.basename(self._paths["front"]) or "(not chosen)")
-        self.lblBack.setText("(both sides are in the picture above)" if one else (os.path.basename(self._paths["back"]) or "(not chosen: only the front is put on the page)"))
+        self.cardBack.setVisible(not one)
+        self.cardFront.set_title("FRONT + BACK  (one picture)" if one else "FRONT")
+        self.cardFront.set_path(self._paths["front"])
+        self.cardBack.set_path(self._paths["back"])
         on = self.chkBorder.isChecked()
         self.btnBorderColor.setEnabled(on)
         self.sldBorder.setEnabled(on)
+        self.lblBorderW.setEnabled(on)
         self.btnBorderColor.setStyleSheet("background: %s; border-radius: 6px; border: 1px solid #4a5268;" % self._bcolor)
         self.lblBorderW.setText(str(self.sldBorder.value()))
         self.sldRound.setEnabled(self.chkRound.isChecked())
+        self.lblRoundV.setEnabled(self.chkRound.isChecked())
         self.lblRoundV.setText("%d%%" % self.sldRound.value())
-        self.sampleRound.set_pct(self.sldRound.value() if self.chkRound.isChecked() else 0)
+        self.lblCropHint.setText({
+            "check": "The card is found by itself, then you see its 4 corners. Drag a corner if it is not exact.",
+            "sure": "The card is found by itself. The 4 corners are shown only when the program is not sure.",
+            "none": "Use this when the picture is already only the card (nothing around it)."}.get(self.cmbCrop.currentData(), ""))
+        self.preview.set(page=self.cmbPage.currentData(), place=self.cmbPlace.currentData(), size=self._size_mm(),
+                         two=(one or bool(self._paths["back"]) or not self._paths["front"]), border=on, color=self._bcolor,
+                         bw=self.sldBorder.value(), rnd=self.sldRound.value() if self.chkRound.isChecked() else 0)
 
     def _pick_border_color(self):
         c = QColorDialog.getColor(QColor(self._bcolor), self, "Border colour")
@@ -330,20 +487,24 @@ class IdUploadDialog(QDialog):
         self.raise_()
         self.activateWindow()
 
+    def _set_path(self, side, p):
+        if not p or not os.path.isfile(p):
+            return
+        self._paths[side] = p
+        self.st.setValue("idup/dir", os.path.dirname(p))
+        self.lblMsg.setText("")
+        self._paint()
+
     def _choose(self, side):
         start = str(self.st.value("idup/dir", "", type=str) or "")
         if not start or not os.path.isdir(start):
             start = ""
         p, _ = QFileDialog.getOpenFileName(self, "Choose the picture" if self.chkOne.isChecked() else "Choose the %s picture" % side.upper(),
                                            start, PICS)
-        if not p:
-            return
-        self._paths[side] = p
-        self.st.setValue("idup/dir", os.path.dirname(p))
-        self._paint()
+        if p:
+            self._set_path(side, p)
 
     def _files(self):
-        """Dropped / picked files can also be given from outside (e.g. drag and drop): [front, back]."""
         return self._paths["front"], self._paths["back"]
 
     # ------------------------------------------------------------------ progress
