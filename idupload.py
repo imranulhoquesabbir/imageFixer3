@@ -310,11 +310,12 @@ class IdUploadDialog(QDialog):
         self.spW = QDoubleSpinBox()
         self.spH = QDoubleSpinBox()
         for sp in (self.spW, self.spH):
-            sp.setRange(20.0, 400.0)
+            sp.setRange(0.0, 500.0)                      # no lower limit while typing: a minimum of 20 blocks keys like '8.6'
+            sp.setKeyboardTracking(False)               # the page picture follows when Enter / Tab is pressed
             sp.setDecimals(1)
             sp.setSuffix(" mm")
-        self.spW.setToolTip("Long side of the card")
-        self.spH.setToolTip("Short side of the card")
+        self.spW.setToolTip("Card width in mm (type a number, Enter)")
+        self.spH.setToolTip("Card height in mm (type a number, Enter)")
         self.rowCustom = QWidget()
         rc = QHBoxLayout(self.rowCustom)
         rc.setContentsMargins(0, 0, 0, 0)
@@ -493,7 +494,10 @@ class IdUploadDialog(QDialog):
 
     def _size_mm(self):
         if self.cmbSize.currentData() == "custom":
-            return (max(self.spW.value(), self.spH.value()), min(self.spW.value(), self.spH.value()))
+            self.spW.interpretText()
+            self.spH.interpretText()
+            w, h = max(20.0, self.spW.value()), max(20.0, self.spH.value())        # too small a number is never used
+            return (max(w, h), min(w, h))
         return idscan.ID1_MM
 
     # ------------------------------------------------------------------ show / files
