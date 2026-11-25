@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QDial
 
 import core
 import extprint
+import units
 import updater
 import winutil
 from card import CLIP_FILES, CROP_KEYS, EXPORT_DIR, TOOL_KEYS, Card, export_path
@@ -426,7 +427,7 @@ SHORTCUT_GROUPS = (
         ("Ctrl+,", "Settings menu"),
         ("PgUp / PgDn / Home / End", "Previous / next / first / last picture"),
         ("Ctrl+Shift+P", "Add from phone"),
-        ("Ctrl+Shift+U", "ID card from files: front + back from pictures (auto crop, real size, A4 / A5 page)"),
+        ("Ctrl+Shift+U", "ID card: front + back from pictures, files or paste (auto crop, real size, A4 / A5 page)"),
         ("Ctrl+Shift+A", "Apply the last setting to all pictures"),
         ("Ctrl+Shift+E", "All pages as one PDF"),
         ("Ctrl+Shift+Left / Right", "Move this page earlier / later"),
@@ -480,6 +481,7 @@ SHORTCUT_GROUPS = (
         ("Shift+Q", "Compare: slider / side by side"),
         ("F", "Real-quality preview: on / off (every real pixel, as Save / Copy give it; Ctrl+1 for 100%)"),
         ("U", "Upscale: make the picture bigger and sharp (each press = one step; the step is in Settings)"),
+        ("Ctrl+Alt+I", "Resize: type an exact size in px, mm, cm or inch"),
         ("Ctrl+B", "Show / hide the side panel"))),
     ("Selection", (
         ("Ctrl+A", "Select all"),
@@ -651,7 +653,7 @@ class MainWindow(QMainWindow):
         _sb(self.btnPhone, "phone", "Add from phone", "Ctrl+Shift+P", extra_tip="Use your phone as a wireless scanner / picture sender (QR code)")
         self.btnPhone.clicked.connect(self.open_phone)
         self.btnIdFile = QPushButton()
-        _sb(self.btnIdFile, "blank", "ID card from files", "Ctrl+Shift+U",
+        _sb(self.btnIdFile, "blank", "ID card", "Ctrl+Shift+U",
             extra_tip="NID front + back from picture files (phone photo, saved scan): auto crop, real size, A4 / A5 page with border")
         self.btnIdFile.clicked.connect(self.open_id_upload)
         self.btnApplyAll = QPushButton()
@@ -719,7 +721,7 @@ class MainWindow(QMainWindow):
         act("New blank page...", self.open_blank)
         act("Scan...", self.open_scan)
         act("Add from phone...", self.open_phone)
-        act("ID card from files...", self.open_id_upload)
+        act("ID card...", self.open_id_upload)
         act("Apply last setting to all", lambda: self._with_loaded(self.apply_to_all))
         act("Choose save folder...", self.choose_dir)
         self.actMoreOpen = act("Open save folder", self.open_dir)
@@ -827,6 +829,12 @@ class MainWindow(QMainWindow):
                           ("xl", "Extra large")))
         self._radio_menu(m, "Upscale step (each click on Upscale)", "upscale_step", self._apply_upscale,
                          (("1.25", "A little  (x 1.25)"), ("1.5", "Normal  (x 1.5)"), ("2", "Double  (x 2)")), default="1.5")
+        self._radio_menu(m, "Units (px / mm / cm / inch)", "units/unit", lambda v: units.set_unit(v),
+                         (("px", "Pixels  (px)"), ("mm", "Millimetres  (mm)"), ("cm", "Centimetres  (cm)"), ("in", "Inches")),
+                         default=units.DEFAULT_UNIT)
+        self._radio_menu(m, "Resolution for real sizes (dpi)", "units/dpi", lambda v: units.set_dpi(int(v)),
+                         (("96", "96 dpi  (screen)"), ("150", "150 dpi"), ("200", "200 dpi"), ("300", "300 dpi  (print)"),
+                          ("600", "600 dpi  (fine print)")), default=str(units.DEFAULT_DPI))
         m.addSeparator()
         q = QAction("Exit Image Fixer", self)
         q.triggered.connect(self.quit_app)
@@ -900,7 +908,8 @@ class MainWindow(QMainWindow):
         tiles = (("add", "Add pictures", "Ctrl+O", "#818cf8", self.choose_files),
                  ("scan", "Scan", "Ctrl+Shift+N", "#22d3ee", self.open_scan),
                  ("phone", "From phone", "Ctrl+Shift+P", "#34d399", self.open_phone),
-                 ("blank", "Blank page", "Ctrl+N", "#60a5fa", self.open_blank))
+                 ("blank", "Blank page", "Ctrl+N", "#60a5fa", self.open_blank),
+                 ("blank", "ID card", "Ctrl+Shift+U", "#fbbf24", self.open_id_upload))
         for n, (ic, name, keys, col, fn) in enumerate(tiles):
             b = QToolButton()
             b.setIcon(_ico(ic, 30))
@@ -918,7 +927,11 @@ class MainWindow(QMainWindow):
             grid.addWidget(b, n // 2, n % 2)
         z.addLayout(grid)
         z.addSpacing(6)
-        hint = QLabel("Ctrl+V  paste     |     drag & drop     |     F1  all shortcuts     |     Esc  go back")
+        zone.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)       # right click on the start screen
+        zone.customContextMenuRequested.connect(lambda pt, zn=zone: self._start_menu(zn.mapToGlobal(pt)))
+        w.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        w.customContextMenuRequested.connect(lambda pt, ww=w: self._start_menu(ww.mapToGlobal(pt)))
+        hint = QLabel("Ctrl+V  paste     |     right click  menu     |     drag & drop     |     F1  all shortcuts     |     Esc  go back")
         hint.setObjectName("muted")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
@@ -1143,6 +1156,7 @@ class MainWindow(QMainWindow):
         sc("Shift+Q", cur(lambda c: c._cmp_mode()), "Compare: slider / side by side")
         sc("F", cur(lambda c: c.preview_full()), "Real-quality preview")
         sc("U", cur(lambda c: c.upscale()), "Upscale")
+        sc("Ctrl+Alt+I", cur(lambda c: c.resize_dialog()), "Resize (exact size in px / mm / cm / inch)")
         sc("Ctrl+B", cur(lambda c: c.toggle_panel()), "Show / hide the side panel")
         # layer order (which overlay / text box is above which)
         sc("Ctrl+Alt+Up", cur(lambda c: c.order_selected(1)), "Layer up")
@@ -1258,7 +1272,7 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(*((6, 4, 6, 4) if small else (12, 6, 12, 6)))
         lay.setSpacing(2 if small else 4)
 
-        words = ((self.btnBlank, "Blank"), (self.btnScan, "Scan"), (self.btnPhone, "Phone"), (self.btnIdFile, "ID file"), (self.btnApplyAll, "Apply to all"))
+        words = ((self.btnBlank, "Blank"), (self.btnScan, "Scan"), (self.btnPhone, "Phone"), (self.btnIdFile, "ID card"), (self.btnApplyAll, "Apply to all"))
         for b_, word in words:                              # a word next to each icon - only if the whole bar still fits
             _lb(b_, word)
         for b_ in (self.lblBrand, self.btnFolder, self.btnOpenDir, self.btnClear, self.btnApplyAll, self.btnPhone, self.btnIdFile, self.lblLogo):
@@ -1462,6 +1476,26 @@ class MainWindow(QMainWindow):
         elif md.hasImage():
             self._add_qimage(md.imageData())
         e.acceptProposedAction()
+
+    def _start_menu(self, global_pt):
+        """Right click on the empty start screen: paste, add, scan ... (the same things as the buttons)."""
+        cb = QApplication.clipboard().mimeData()
+        has = bool(cb is not None and (cb.hasImage() or cb.hasUrls() or cb.hasFormat("application/pdf")))
+        m = QMenu(self)
+        a_paste = m.addAction("Paste picture\tCtrl+V")
+        a_paste.setEnabled(has)
+        m.addSeparator()
+        items = ((m.addAction("Add pictures...\tCtrl+O"), self.choose_files), (m.addAction("ID card...\tCtrl+Shift+U"), self.open_id_upload),
+                 (m.addAction("Scan...\tCtrl+Shift+N"), self.open_scan), (m.addAction("Add from phone...\tCtrl+Shift+P"), self.open_phone),
+                 (m.addAction("New blank page...\tCtrl+N"), self.open_blank))
+        act = m.exec(global_pt)
+        if act is a_paste:
+            self.paste()
+            return
+        for a_, fn in items:
+            if act is a_:
+                fn()
+                return
 
     def paste(self):
         cb = QApplication.clipboard()

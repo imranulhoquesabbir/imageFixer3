@@ -62,6 +62,7 @@ def g_reset(p): _arc(p, 12, 12, 8, 120, 280); _line(p, 4, 4.5, 4.5, 9.5, 9.5, 9)
 def g_compare(p): _rrect(p, 3, 5, 18, 14); _line(p, 12, 3, 12, 21); p.setBrush(p.pen().color()); p.drawRect(QRectF(5, 7, 5, 10)); p.setBrush(Qt.BrushStyle.NoBrush)
 def g_eye(p): _arc(p, 12, 17, 9, 51, 78); _arc(p, 12, 7, 9, 231, 78); p.drawEllipse(QPointF(12, 12), 3, 3)
 def g_upscale(p): _line(p, 14, 4, 20, 4, 20, 10); _line(p, 10, 20, 4, 20, 4, 14); _line(p, 20, 4, 13, 11); _line(p, 4, 20, 11, 13)
+def g_resize(p): _rrect(p, 4, 4, 16, 16); _line(p, 4, 20, 20, 4); _line(p, 14, 4, 20, 4, 20, 10); _line(p, 10, 20, 4, 20, 4, 14)
 def g_close(p): _line(p, 6, 6, 18, 18); _line(p, 18, 6, 6, 18)
 def g_panel(p): _rrect(p, 3, 4, 18, 16); _line(p, 15, 4, 15, 20)
 def g_hand(p): _line(p, 8, 13, 8, 6.5); _line(p, 11, 12, 11, 4.5); _line(p, 14, 12, 14, 5.5); _line(p, 17, 13, 17, 8); _line(p, 8, 13, 5.5, 11, 4.5, 13, 8.5, 20, 16, 20, 17.5, 16, 17, 13)
@@ -147,7 +148,7 @@ COLORS = {
     "add": "#a5b4fc", "files": "#a5b4fc", "blank": "#60a5fa", "scan": "#22d3ee", "phone": "#34d399", "apply": "#a3e635",
     "save": "#4ade80", "saveall": "#4ade80", "pdf": "#f87171", "folder": "#fbbf24", "open": "#fcd34d", "trash": "#fb7185",
     "more": "#94a3b8", "help": "#38bdf8", "settings": "#94a3b8", "gear": "#94a3b8", "shortcuts": "#38bdf8",
-    "undo": "#a78bfa", "redo": "#a78bfa", "reset": "#fb923c", "compare": "#22d3ee", "eye": "#38bdf8", "upscale": "#c084fc",
+    "undo": "#a78bfa", "redo": "#a78bfa", "reset": "#fb923c", "compare": "#22d3ee", "eye": "#38bdf8", "upscale": "#c084fc", "resize": "#f0abfc",
     "close": "#fb7185", "panel": "#94a3b8", "hand": "#fcd34d", "dropper": "#2dd4bf", "brush": "#f472b6",
     "select": "#60a5fa", "move": "#a78bfa", "erase": "#fb923c", "crop": "#4ade80", "layer": "#c084fc", "group": "#2dd4bf", "ungroup": "#fb923c", "text": "#fbbf24",
     "prev": "#a5b4fc", "next": "#a5b4fc", "pageL": "#94a3b8", "pageR": "#94a3b8", "check": "#4ade80",

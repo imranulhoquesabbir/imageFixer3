@@ -159,7 +159,7 @@ ACTIONS = {
     "Copying": ("copy", "Copied"), "Moving": ("move", "Moved"), "Erasing": ("erase", "Erased"),
     "Deleting": ("delete", "Deleted"), "Filling": ("fill", "Filled"), "Painting": ("paint", "Painted"),
     "Cropping": ("crop", "Cropped"), "Cropping to the shape": ("crop", "Cropped"),
-    "Rotating": ("rotate", "Rotated"), "Transforming": ("resize", "Transformed"), "Upscaling": ("resize", "Upscaled"),
+    "Rotating": ("rotate", "Rotated"), "Transforming": ("resize", "Transformed"), "Upscaling": ("resize", "Upscaled"), "Resizing": ("resize", "Resized"),
     "Removing shadows": ("shadow", "Shadows removed"),
 }
 TOOL_TITLE = {"view": "Hand", "pick": "Eyedropper", "paint": "Color Brush", "move": "Move", "copy": "Copy",
@@ -1007,6 +1007,7 @@ class Card(QWidget):
         S(self.btnCompare, "compare", "Compare with the original", "Q")
         S(self.btnPreview, "eye", "Real-quality preview", "F")
         S(self.btnUpscale, "upscale", "Upscale", "U")
+        S(self.btnResize, "resize", "Resize: type the size in px / mm / cm / inch", "Ctrl+Alt+I")
         S(self.btnRemove, "trash", "Remove from the list", "Del")
         S(self.btnPanel, "panel", "Show / hide the side panel", "Ctrl+B")
         S(self.btnHand, "hand", "Hand: drag the picture", "H")
@@ -1193,6 +1194,9 @@ class Card(QWidget):
         self.btnUpscale.setToolTip("Make the picture bigger and keep it sharp. Every click = one more step "
                                    "(set the step in Settings > Upscale step).   Key: U   (Ctrl+Z undoes it)")
         self.btnUpscale.hide()
+        self.btnResize = QPushButton("Resize")
+        self.btnResize.setToolTip("Set an exact size in px, mm, cm or inch (the unit is in Settings > Units).   Key: Ctrl+Alt+I   (Ctrl+Z undoes it)")
+        self.btnResize.hide()
         self.btnRemove = QPushButton("Remove")
         self.btnRemove.setProperty("danger", True)
         self.btnRemove.setToolTip("Remove this picture from the list (the file on the disk is not touched)")
@@ -1205,7 +1209,7 @@ class Card(QWidget):
         r1.addWidget(self.lblInfo)
         r1.addWidget(self.lblState)
         r1.addStretch(1)
-        for b in (self.btnPanel, self.btnCompare, self.btnCmpMode, self.btnPreview, self.btnUpscale, self.btnUndo, self.btnRedo, self.btnReset, self.btnRemove):
+        for b in (self.btnPanel, self.btnCompare, self.btnCmpMode, self.btnPreview, self.btnUpscale, self.btnResize, self.btnUndo, self.btnRedo, self.btnReset, self.btnRemove):
             r1.addWidget(b)
         root.addLayout(r1)
 
@@ -1602,6 +1606,7 @@ class Card(QWidget):
         self.btnCompare.clicked.connect(self.compare)
         self.btnPreview.clicked.connect(self.preview_full)
         self.btnUpscale.clicked.connect(self.upscale)
+        self.btnResize.clicked.connect(self.resize_dialog)
         self.btnCmpMode.clicked.connect(self._cmp_mode)
         self.btnRemove.clicked.connect(lambda: self.removeRequested.emit(self))
         self.btnPanel.clicked.connect(self._panel_clicked)
@@ -1645,7 +1650,7 @@ class Card(QWidget):
         self.lblInfo.setVisible(not narrow)
         self.lblState.setVisible(w >= 520)
         wide = w >= 880
-        for b_, word in ((self.btnCompare, "Compare"), (self.btnPreview, "Preview"), (self.btnUpscale, "Upscale"),
+        for b_, word in ((self.btnCompare, "Compare"), (self.btnPreview, "Preview"), (self.btnUpscale, "Upscale"), (self.btnResize, "Resize"),
                          (self.btnReset, "Reset"), (self.btnPanel, "Panel")):
             _label_btn(b_, word if wide else "")
         self._r1.setSpacing(4 if compact else 8)
@@ -2561,6 +2566,7 @@ class Card(QWidget):
         self.btnCompare.setVisible(can_cmp)
         self.btnPreview.setVisible(self._loaded)
         self.btnUpscale.setVisible(self._loaded)
+        self.btnResize.setVisible(self._loaded)
         if not can_cmp and self._cmp is not None:          # back to the original: nothing left to compare
             self._compare_off()
         self.btnCmpMode.setVisible(can_cmp and self._cmp is not None)
@@ -2708,6 +2714,35 @@ class Card(QWidget):
 
     # ------------------------------------------------ upscale
     UPSCALE_STEP = 1.5                                     # set from Settings > Upscale step
+
+    def resize_dialog(self):
+        """The Resize button: type an exact size in px / mm / cm / inch.  The page (or the picture layer being edited) is
+        scaled to it, sharp, as ONE undo step.  The dpi is kept in the picture, so Save writes a file of that real size."""
+        if not self._loaded:
+            return
+        if self._fq is not None:
+            self._fq_off()
+        if self._tool in CROP_KEYS or self._tool == "transform" or self._place_id is not None:
+            self._place_id = None
+            self._hide_layer = None
+            self._go_move()
+        import resizedlg
+        base, alpha = self.base, self.alpha
+        got = resizedlg.ResizeDialog(base.size, self.window()).run()
+        if got is None:
+            return
+        w, h, dpi = got
+        if (w, h) == tuple(base.size):
+            if dpi and base.info.get("dpi", (0,))[0] != dpi:       # only the dpi changed: the pixels stay as they are
+                base.info["dpi"] = (float(dpi), float(dpi))
+                self.say("Resolution set to %d dpi (the pixels are the same)." % dpi)
+            return
+        size = (w, h)
+        am = (lambda progress: core.resize_to(alpha, size, mask=True)) if self.ctx is not None and alpha is not None else None
+        pm = lambda progress, pa: core.resize_to(pa, size, mask=True)
+        self._fx_hint = {"title": "Resized", "detail": lambda: "%d \u00d7 %d px  (%d dpi)" % (self.base.size[0], self.base.size[1], dpi)}
+        self._edit_base("Resizing", lambda progress: core.resize_to(base, size, dpi=dpi), keep_sel=False, refit=True,
+                        alpha_make=am, palpha_make=pm)
 
     def upscale(self):
         """The Upscale button: the picture (the page, or the picture layer being edited) gets UPSCALE_STEP times bigger and

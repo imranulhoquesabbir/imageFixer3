@@ -1778,6 +1778,9 @@ def save_image(img, path, src=None, fast=False):
     e = os.path.splitext(path)[1].lower()
     meta = source_meta(src) if src and os.path.isfile(src) else {}
     kw = {"dpi": meta.get("dpi", (EXPORT_DPI, EXPORT_DPI))}
+    own = img.info.get("dpi") if hasattr(img, "info") else None            # set by Resize: the size the person chose
+    if own and float(own[0]) > 1 and float(own[1]) > 1:
+        kw["dpi"] = (float(own[0]), float(own[1]))
     if "icc_profile" in meta:
         kw["icc_profile"] = meta["icc_profile"]
     if e in (".jpg", ".jpeg", ".bmp", ".pdf"):
@@ -2751,6 +2754,26 @@ def upscale_size(size, factor):
     if max(nw, nh) > MAX_UPSCALE_SIDE or nw * nh > Image.MAX_IMAGE_PIXELS * 0.8:
         return None
     return nw, nh
+
+
+def resize_to(img, size, mask=False, dpi=None):
+    """Exact new size (w, h) in pixels, picture kept sharp: Lanczos, and a little sharpening only when it gets BIGGER.
+    dpi (optional): written into the picture, so Save gives a file that is that many mm / inches big in other programs."""
+    w, h = max(1, int(size[0])), max(1, int(size[1]))
+    if max(w, h) > MAX_UPSCALE_SIDE or w * h > Image.MAX_IMAGE_PIXELS * 0.8:
+        raise ValueError("The picture would become too big (more than %d px on the long side)" % MAX_UPSCALE_SIDE)
+    if (w, h) == tuple(img.size):
+        out = img.copy()
+    elif mask:
+        out = img.resize((w, h), Image.Resampling.BICUBIC)
+    else:
+        out = img.resize((w, h), Image.Resampling.LANCZOS)
+        f = max(w / float(img.size[0]), h / float(img.size[1]))
+        if f > 1.05:
+            out = out.filter(_PilFilter.UnsharpMask(radius=0.7 + 0.5 * f, percent=int(min(120, 45 + 55 * (f - 1.0))), threshold=3))
+    if dpi and not mask:
+        out.info["dpi"] = (float(dpi), float(dpi))
+    return out
 
 
 def upscale_image(img, factor=1.5, mask=False):

@@ -1,4 +1,4 @@
-"""'ID card from files': the same as the Scan window's ID card mode, but the pictures come from FILES (a phone photo, a
+"""'ID card': the same as the Scan window's ID card mode, but the pictures come from FILES (a phone photo, a
 saved scan, a picture with both sides on one page) instead of a scanner.
 
   1. the card is looked for with the program's own Auto crop (scanner.detect_document) and, as a second opinion, the
@@ -17,15 +17,16 @@ import time
 
 import numpy as np
 from PIL import Image, ImageOps
-from PySide6.QtCore import QRectF, QTimer, Qt, Signal
+from PySide6.QtCore import QPoint, QRectF, QTimer, Qt, Signal
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDialog, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QHBoxLayout, QLabel, QProgressBar, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
-from PySide6.QtGui import QColor, QImageReader, QPainter, QPen, QPixmap
+                               QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 
 import idpreview
 import idscan
 import jobs
 import scanfix
+import units
 import valuedit
 
 PICS = "Pictures (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)"
@@ -128,6 +129,8 @@ class PicCard(QFrame):
     """One big box for one picture: click it or drop a file on it; shows the picture so you know it is the right one."""
     clicked = Signal()
     dropped = Signal(str)
+    imageDropped = Signal(QImage)          # a picture dragged from a web page / another program (no file)
+    menuRequested = Signal(QPoint)         # right click
 
     def __init__(self, title, hint):
         super().__init__()
@@ -183,15 +186,26 @@ class PicCard(QFrame):
         if e.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
+    def contextMenuEvent(self, e):
+        self.menuRequested.emit(e.globalPos())
+        e.accept()
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
+        if e.mimeData().hasUrls() or e.mimeData().hasImage():
             e.acceptProposedAction()
 
     def dropEvent(self, e):
-        for u in e.mimeData().urls():
+        md = e.mimeData()
+        for u in md.urls():
             if u.isLocalFile():
                 self.dropped.emit(u.toLocalFile())
-                break
+                e.acceptProposedAction()
+                return
+        if md.hasImage():
+            img = QImage(md.imageData())
+            if not img.isNull():
+                self.imageDropped.emit(img)
+                e.acceptProposedAction()
 
 
 class PagePreview(QWidget):
@@ -250,7 +264,7 @@ class IdUploadDialog(QDialog):
         super().__init__(win)
         self.win = win
         self.st = win.settings
-        self.setWindowTitle("ID card from files")
+        self.setWindowTitle("ID card")
         self.setModal(False)
         self.setMinimumWidth(600)
         self.work = tempfile.mkdtemp(prefix="idup_", dir=win.tmp)
@@ -279,12 +293,20 @@ class IdUploadDialog(QDialog):
         v.addWidget(_section("1   Pictures"))
         row = QHBoxLayout()
         row.setSpacing(10)
-        self.cardFront = PicCard("FRONT", "Click here or drop the picture")
-        self.cardBack = PicCard("BACK", "Click here or drop the picture")
+        self.cardFront = PicCard("FRONT", "Click, drop or paste (Ctrl+V)\nRight-click for more")
+        self.cardBack = PicCard("BACK", "Click, drop or paste (Ctrl+V)\nRight-click for more")
         self.cardFront.clicked.connect(lambda: self._choose("front"))
         self.cardBack.clicked.connect(lambda: self._choose("back"))
         self.cardFront.dropped.connect(lambda p: self._set_path("front", p))
         self.cardBack.dropped.connect(lambda p: self._set_path("back", p))
+        self.cardFront.imageDropped.connect(lambda im: self._set_qimage("front", im))
+        self.cardBack.imageDropped.connect(lambda im: self._set_qimage("back", im))
+        self.cardFront.menuRequested.connect(lambda pt: self._card_menu("front", pt))
+        self.cardBack.menuRequested.connect(lambda pt: self._card_menu("back", pt))
+        self._pasteN = 0
+        self.setAcceptDrops(True)                                   # a drop anywhere in the window fills the next empty box
+        QShortcut(QKeySequence("Ctrl+V"), self, activated=self._paste_key)
+        QShortcut(QKeySequence("Shift+Insert"), self, activated=self._paste_key)
         row.addWidget(self.cardFront, 1)
         row.addWidget(self.cardBack, 1)
         v.addLayout(row)
@@ -307,21 +329,20 @@ class IdUploadDialog(QDialog):
         self.cmbSize = Seg((("NID  85.6 x 54 mm", "id1"), ("Custom size", "custom")),
                            ("Smart NID / bank card size (ID-1)", "Type the width and height of the card yourself"))
         form.addRow("Card size", self.cmbSize)
-        self.spW = QDoubleSpinBox()
-        self.spH = QDoubleSpinBox()
-        for sp in (self.spW, self.spH):
-            sp.setRange(0.0, 500.0)                      # no lower limit while typing: a minimum of 20 blocks keys like '8.6'
-            sp.setKeyboardTracking(False)               # the page picture follows when Enter / Tab is pressed
-            sp.setDecimals(1)
-            sp.setSuffix(" mm")
-        self.spW.setToolTip("Card width in mm (type a number, Enter)")
-        self.spH.setToolTip("Card height in mm (type a number, Enter)")
+        self.spW = units.UnitSpin(idscan.ID1_MM[0], 20.0, 400.0)
+        self.spH = units.UnitSpin(idscan.ID1_MM[1], 20.0, 400.0)
+        self.cmbUnit = units.UnitPicker()
+        self.spW.setProperty("tip", "Long side of the card")
+        self.spW.setToolTip("Long side of the card")
+        self.spH.setProperty("tip", "Short side of the card")
+        self.spH.setToolTip("Short side of the card")
         self.rowCustom = QWidget()
         rc = QHBoxLayout(self.rowCustom)
         rc.setContentsMargins(0, 0, 0, 0)
         rc.addWidget(self.spW, 1)
         rc.addWidget(QLabel("x"))
         rc.addWidget(self.spH, 1)
+        rc.addWidget(self.cmbUnit)
         self.lblCustom = QLabel("")
         form.addRow(self.lblCustom, self.rowCustom)
         self.chkBorder = QCheckBox("Border")
@@ -413,8 +434,8 @@ class IdUploadDialog(QDialog):
             st = self.st
             self.cmbCrop.set_data(str(st.value("idup/crop", "check")))
             self.cmbSize.set_data(str(st.value("idup/size", "id1")))
-            self.spW.setValue(float(st.value("idup/w", idscan.ID1_MM[0]) or idscan.ID1_MM[0]))
-            self.spH.setValue(float(st.value("idup/h", idscan.ID1_MM[1]) or idscan.ID1_MM[1]))
+            self.spW.set_mm(float(st.value("idup/w", idscan.ID1_MM[0]) or idscan.ID1_MM[0]))
+            self.spH.set_mm(float(st.value("idup/h", idscan.ID1_MM[1]) or idscan.ID1_MM[1]))
             self.cmbPage.set_data(str(st.value("scan/page", "A4")))
             self.cmbPlace.set_data(str(st.value("scan/place", "center")))
             self.chkOne.setChecked(st.value("idup/one", False, type=bool))
@@ -436,8 +457,8 @@ class IdUploadDialog(QDialog):
         s = self.st
         s.setValue("idup/crop", self.cmbCrop.currentData())
         s.setValue("idup/size", self.cmbSize.currentData())
-        s.setValue("idup/w", float(self.spW.value()))
-        s.setValue("idup/h", float(self.spH.value()))
+        s.setValue("idup/w", float(self.spW.mm()))
+        s.setValue("idup/h", float(self.spH.mm()))
         s.setValue("idup/one", self.chkOne.isChecked())
         s.setValue("scan/page", self.cmbPage.currentData())
         s.setValue("scan/place", self.cmbPlace.currentData())
@@ -456,7 +477,7 @@ class IdUploadDialog(QDialog):
         if not custom:
             for sp, val in ((self.spW, idscan.ID1_MM[0]), (self.spH, idscan.ID1_MM[1])):
                 sp.blockSignals(True)
-                sp.setValue(val)
+                sp.set_mm(val)
                 sp.blockSignals(False)
         one = self.chkOne.isChecked()
         self.cardBack.setVisible(not one)
@@ -494,10 +515,7 @@ class IdUploadDialog(QDialog):
 
     def _size_mm(self):
         if self.cmbSize.currentData() == "custom":
-            self.spW.interpretText()
-            self.spH.interpretText()
-            w, h = max(20.0, self.spW.value()), max(20.0, self.spH.value())        # too small a number is never used
-            return (max(w, h), min(w, h))
+            return (max(self.spW.mm(), self.spH.mm()), min(self.spW.mm(), self.spH.mm()))
         return idscan.ID1_MM
 
     # ------------------------------------------------------------------ show / files
@@ -534,6 +552,131 @@ class IdUploadDialog(QDialog):
         self.st.setValue("idup/dir", os.path.dirname(p))
         self.lblMsg.setText("")
         self._paint()
+
+    # ------------------------------------------------------------------ paste / copy / drop / right click
+    def _side_for(self, side):
+        """Which box gets the picture: the one asked for, else the one under the mouse, else the first empty one."""
+        if side:
+            return side
+        pos = QCursor.pos()
+        for name, card in (("front", self.cardFront), ("back", self.cardBack)):
+            if card.isVisible() and card.rect().contains(card.mapFromGlobal(pos)):
+                return name
+        if not self._paths["front"]:
+            return "front"
+        if not self._paths["back"] and self.cardBack.isVisible():
+            return "back"
+        return "front"
+
+    def _set_qimage(self, side, img):
+        if img is None or img.isNull():
+            return
+        self._pasteN += 1
+        p = os.path.join(self.work, "pasted_%s_%d.png" % (time.strftime("%H%M%S"), self._pasteN))
+        if not img.save(p, "PNG"):
+            self.lblMsg.setText("Could not take that picture.")
+            return
+        self._set_path(self._side_for(side), p)
+
+    def _clipboard_has_picture(self):
+        md = QApplication.clipboard().mimeData()
+        return bool(md is not None and (md.hasImage() or any(u.isLocalFile() for u in md.urls())))
+
+    def _paste_key(self):
+        fw = QApplication.focusWidget()
+        if isinstance(fw, QLineEdit):                   # typing a size: Ctrl+V pastes TEXT there, as everywhere in Windows
+            fw.paste()
+            return
+        self._paste(None)
+
+    def _paste(self, side=None):
+        """Ctrl+V, right click > Paste: a picture copied from anywhere (a web page, a chat, a screenshot) or picture FILES
+        copied in Explorer.  Two files at once fill Front and Back."""
+        cb = QApplication.clipboard()
+        md = cb.mimeData()
+        if md is None:
+            return
+        files = [u.toLocalFile() for u in md.urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
+        if files:
+            if len(files) >= 2 and side is None and not self.chkOne.isChecked():
+                self._set_path("front", files[0])
+                self._set_path("back", files[1])
+            else:
+                self._set_path(self._side_for(side), files[0])
+            return
+        if md.hasImage():
+            self._set_qimage(side, cb.image())
+            return
+        self.lblMsg.setText("Nothing to paste. Copy a picture (or picture files in Explorer) first.")
+
+    def _copy_picture(self, side):
+        p = self._paths[side]
+        if p and os.path.isfile(p):
+            img = QImage(p)
+            if not img.isNull():
+                QApplication.clipboard().setImage(img)
+                self.lblMsg.setText("Picture copied.")
+
+    def _clear(self, side):
+        self._paths[side] = ""
+        self._paint()
+
+    def _card_menu(self, side, global_pt):
+        m = QMenu(self)
+        name = "picture" if self.chkOne.isChecked() else side.upper() + " picture"
+        a_paste = m.addAction("Paste %s\tCtrl+V" % name)
+        a_paste.setEnabled(self._clipboard_has_picture())
+        a_file = m.addAction("Choose a file ...")
+        m.addSeparator()
+        a_copy = m.addAction("Copy this picture")
+        a_clear = m.addAction("Remove this picture")
+        a_copy.setEnabled(bool(self._paths[side]))
+        a_clear.setEnabled(bool(self._paths[side]))
+        m.addSeparator()
+        a_swap = m.addAction("Swap FRONT and BACK")
+        a_swap.setEnabled(not self.chkOne.isChecked() and bool(self._paths["front"] or self._paths["back"]))
+        act = m.exec(global_pt)
+        if act is a_paste:
+            self._paste(side)
+        elif act is a_file:
+            self._choose(side)
+        elif act is a_copy:
+            self._copy_picture(side)
+        elif act is a_clear:
+            self._clear(side)
+        elif act is a_swap:
+            self._paths["front"], self._paths["back"] = self._paths["back"], self._paths["front"]
+            self._paint()
+
+    def contextMenuEvent(self, e):
+        """Right click anywhere else in the window."""
+        m = QMenu(self)
+        a_paste = m.addAction("Paste picture\tCtrl+V")
+        a_paste.setEnabled(self._clipboard_has_picture())
+        a_file = m.addAction("Choose a file ...")
+        act = m.exec(e.globalPos())
+        if act is a_paste:
+            self._paste(None)
+        elif act is a_file:
+            self._choose(self._side_for(None))
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls() or e.mimeData().hasImage():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        md = e.mimeData()
+        files = [u.toLocalFile() for u in md.urls() if u.isLocalFile()]
+        if files:
+            if len(files) >= 2 and not self.chkOne.isChecked():
+                self._set_path("front", files[0])
+                self._set_path("back", files[1])
+            else:
+                self._set_path(self._side_for(None), files[0])
+            e.acceptProposedAction()
+        elif md.hasImage():
+            self._set_qimage(None, QImage(md.imageData()))
+            e.acceptProposedAction()
 
     def _choose(self, side):
         start = str(self.st.value("idup/dir", "", type=str) or "")

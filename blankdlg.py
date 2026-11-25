@@ -5,6 +5,8 @@ Pick any colour and a size, then either
   * put it on the page you are working on as an OVERLAY picture (a layer you can move, resize, turn, fade).
 """
 from PIL import Image
+
+import units
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QColorDialog, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
@@ -21,6 +23,7 @@ SIZES = [("A4 portrait  (1654 x 2339)", 1654, 2339), ("A4 landscape  (2339 x 165
          ("Legal portrait  (1700 x 2800)", 1700, 2800),
          ("Square  (1080 x 1080)", 1080, 1080), ("Full HD  (1920 x 1080)", 1920, 1080),
          ("Phone story  (1080 x 1920)", 1080, 1920), ("ID card page, A4 at 300 dpi  (2480 x 3508)", 2480, 3508)]
+PAGE_DPI = 200
 MAX_SIDE = 8000
 MIN_SIDE = 16
 
@@ -89,17 +92,18 @@ class BlankPageDialog(QDialog):
         self.customRow = QWidget()
         cr = QHBoxLayout(self.customRow)
         cr.setContentsMargins(0, 0, 0, 0)
-        self.spW = QSpinBox()
-        self.spH = QSpinBox()
+        # pages are drawn at 200 dpi (see SIZES), so mm / cm / inch here mean real paper size at 200 dpi
+        self.spW = units.UnitSpin(0, 1, 1, own_dpi=PAGE_DPI)
+        self.spH = units.UnitSpin(0, 1, 1, own_dpi=PAGE_DPI)
+        self.cmbUnit = units.UnitPicker()
         for sp, v in ((self.spW, 1654), (self.spH, 2339)):
-            sp.setRange(MIN_SIDE, MAX_SIDE)
-            sp.setValue(v)
-            sp.setSuffix(" px")
-            sp.setKeyboardTracking(False)
+            sp.set_limits_mm(units.px_to_mm(MIN_SIDE, PAGE_DPI), units.px_to_mm(MAX_SIDE, PAGE_DPI))
+            sp.set_px(v)
         cr.addWidget(QLabel("Width"))
         cr.addWidget(self.spW)
         cr.addWidget(QLabel("Height"))
         cr.addWidget(self.spH)
+        cr.addWidget(self.cmbUnit)
         cr.addStretch(1)
         root.addWidget(self.customRow)
         self.customRow.setVisible(False)
@@ -152,7 +156,7 @@ class BlankPageDialog(QDialog):
         if d == "same":
             return None
         if d == "custom":
-            return (self.spW.value(), self.spH.value())
+            return (self.spW.px(), self.spH.px())
         return tuple(d)
 
     def _make_page(self):
