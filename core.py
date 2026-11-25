@@ -2550,7 +2550,7 @@ def _apply_border(out, border, shape_alpha=None):
 # Drop shadow of a layer (picture, QR, ID card, text box ...): ((r, g, b), strength 0..1, softness 0..1, distance 0..1,
 # direction in degrees) or None.  Sizes are relative to the layer's long side, so a small logo gets a small shadow.
 # 0 degrees = shadow falls to the right, 90 = down (same direction on the page whatever the layer's turn).
-SHADOW_DEFAULTS = {"color": "#000000", "opacity": 55, "blur": 30, "dist": 20, "angle": 45}
+LAYER_SHADOW_DEFAULTS = {"color": "#000000", "opacity": 55, "blur": 30, "dist": 20, "angle": 45}
 SH_BLUR_K = 0.05            # softness 100 % = blur sigma of 5 % of the layer's long side
 SH_DIST_K = 0.08            # distance 100 % = 8 % of the layer's long side
 

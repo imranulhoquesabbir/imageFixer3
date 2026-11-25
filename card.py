@@ -2215,7 +2215,7 @@ class Card(QWidget):
         # ---- drop shadow of the selected layer(s): picture, QR, ID card, text box
         gs, gsl = self._group_box("Drop shadow", collapsible=False)
         self._shadow_sync = False
-        self._sh_hex = core.SHADOW_DEFAULTS["color"]
+        self._sh_hex = core.LAYER_SHADOW_DEFAULTS["color"]
         self.lblShadowFor = QLabel("")
         self.lblShadowFor.setObjectName("hint")
         self.lblShadowFor.setWordWrap(True)
@@ -2236,13 +2236,13 @@ class Card(QWidget):
         srow2.addWidget(self.edShHex)
         srow2.addStretch(1)
         gsl.addLayout(srow2)
-        self.shOpRow = SliderRow("Strength", 0, 100, core.SHADOW_DEFAULTS["opacity"], ("faint", "", "dark"),
+        self.shOpRow = SliderRow("Strength", 0, 100, core.LAYER_SHADOW_DEFAULTS["opacity"], ("faint", "", "dark"),
                                  "How dark the shadow is.", "")
-        self.shBlurRow = SliderRow("Softness", 0, 100, core.SHADOW_DEFAULTS["blur"], ("sharp", "", "soft"),
+        self.shBlurRow = SliderRow("Softness", 0, 100, core.LAYER_SHADOW_DEFAULTS["blur"], ("sharp", "", "soft"),
                                    "How blurry the edge of the shadow is (relative to the size of the layer).", "")
-        self.shDistRow = SliderRow("Distance", 0, 100, core.SHADOW_DEFAULTS["dist"], ("near", "", "far"),
+        self.shDistRow = SliderRow("Distance", 0, 100, core.LAYER_SHADOW_DEFAULTS["dist"], ("near", "", "far"),
                                    "How far the shadow is pushed away from the layer (relative to the size of the layer).", "")
-        self.shAngRow = SliderRow("Direction", 0, 360, core.SHADOW_DEFAULTS["angle"], ("right", "down", "left"),
+        self.shAngRow = SliderRow("Direction", 0, 360, core.LAYER_SHADOW_DEFAULTS["angle"], ("right", "down", "left"),
                                   "Where the shadow falls: 0 = right, 90 = down, 180 = left, 270 = up.\n"
                                   "It stays the same on the page when the layer is turned.", "")
         for w_ in (self.shOpRow, self.shBlurRow, self.shDistRow, self.shAngRow):
