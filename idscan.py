@@ -335,3 +335,116 @@ def preview_image(sides, border=None, width=360, bg=(226, 230, 238), pad=14, rou
         out.paste(t, (x, (H - t.height) // 2), t)
         x += t.width + pad
     return out
+
+
+# ------------------------------------------------------------------------------------------ cards from FILES (upload)
+ID1_MM = (85.6, 54.0)                     # a smart NID / bank card: the long side is 85.6 mm, the short side 54 mm
+
+
+def whole_quad(img):
+    W, H = img.size
+    return np.array([[0, 0], [W - 1, 0], [W - 1, H - 1], [0, H - 1]], np.float32)
+
+
+def inset_quad(quad, k=0.004):
+    """The 4 corners moved a hair towards the middle (no sliver of the table / paper behind the card is left)."""
+    q = np.asarray(quad, np.float32)
+    c = q.mean(axis=0)
+    return c + (q - c) * (1.0 - k)
+
+
+def find_cards(img, n=2):
+    """Up to n card-like rectangles in ONE picture (front above / beside back on a page).  -> list of 4x2 corner arrays
+    (TL, TR, BR, BL; picture pixels), ordered top to bottom (or left to right when they lie side by side)."""
+    rgb = np.asarray(img.convert("RGB"))
+    H, W = rgb.shape[:2]
+    scale = min(1.0, 1000.0 / max(H, W))
+    small = cv2.resize(rgb, (max(8, int(W * scale)), max(8, int(H * scale))), interpolation=cv2.INTER_AREA) if scale < 1 else rgb
+    min_area = small.shape[0] * small.shape[1] * 0.01
+    found = []
+    for m in _masks(small):
+        for c in _contours(m, min_area):
+            rect = cv2.minAreaRect(c)
+            (cx, cy), (w, h), ang = rect
+            if w < 8 or h < 8:
+                continue
+            fill = cv2.contourArea(c) / float(w * h)
+            asp = max(w, h) / min(w, h)
+            if fill < 0.85 or not (1.25 <= asp <= 2.0):
+                continue
+            if w * h > 0.8 * small.shape[0] * small.shape[1]:          # the whole page, not a card
+                continue
+            found.append((w * h * fill * math.exp(-abs(math.log(asp / CARD_ASPECT)) * 2.0), (cx, cy), rect))
+    found.sort(key=lambda t: -t[0])
+    picked = []
+    for s, (cx, cy), rect in found:
+        w, h = rect[1]
+        r = max(w, h) / 2.0
+        if all(math.hypot(cx - p[1][0], cy - p[1][1]) > 0.5 * r for p in picked):       # the same card seen by two masks
+            picked.append((s, (cx, cy), rect))
+        if len(picked) >= n:
+            break
+    if len(picked) == 2 and abs(picked[0][1][0] - picked[1][1][0]) > abs(picked[0][1][1] - picked[1][1][1]):
+        picked.sort(key=lambda t: t[1][0])                              # side by side: left to right
+    else:
+        picked.sort(key=lambda t: t[1][1])                              # one above the other: top to bottom
+    out = []
+    for s, (cx, cy), (c_, (w, h), ang) in picked:
+        pts = cv2.boxPoints(((cx / scale, cy / scale), (w / scale, h / scale), ang))
+        out.append(_order(pts))
+    return out
+
+
+def to_real_size(card, size_mm=ID1_MM, enhance_dpi=None, snap=0.06, lo=150, hi=600):
+    """A straight card picture -> (card at its real size, dpi).  The card lies down (turned when standing).  When its
+    shape is within `snap` of the wanted card size, it is made exactly that size (no stretching beyond a few percent);
+    otherwise its own shape stays and its LONG side is the long side of the size.  dpi = the pixels per inch the
+    card is given (its own detail, kept between lo and hi)."""
+    card = card.convert("RGB")
+    if card.height > card.width:
+        card = card.rotate(90, expand=True)
+    long_mm, short_mm = max(size_mm), min(size_mm)
+    own = card.width / float(card.height)
+    want = long_mm / short_mm
+    dpi = (enhance_dpi if enhance_dpi else card.width / (long_mm / 25.4))
+    dpi = max(lo, min(hi, float(dpi)))
+    pw = int(round(long_mm / 25.4 * dpi))
+    ph = int(round(short_mm / 25.4 * dpi)) if abs(own / want - 1.0) <= snap else int(round(pw / own))
+    if (pw, ph) != card.size:
+        card = card.resize((max(8, pw), max(8, ph)), Image.Resampling.LANCZOS)
+    return card, dpi
+
+
+def cut_quad_refined(img, quad, keep_orientation=True):
+    """Like cut_card, but the 4 corners are given (by the auto crop or by hand): the card is straightened, its 4 edges are
+    looked for again in a narrow band around the corners (a few pixels off is fine) and it is cut a hair inside its edge.
+    The picture has no dpi, so the card's own size (3.37 inch long) is used to know how wide the band is."""
+    q = _order(quad)
+    w = float((np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3])) / 2)
+    h = float((np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])) / 2)
+    if w < 40 or h < 40:
+        return cut_quad(img, quad, keep_orientation)
+    dpi = max(w, h) / (ID1_MM[0] / 25.4)
+    m = max(8, int(dpi * 0.06))
+    pw, ph = int(round(w)) + 2 * m, int(round(h)) + 2 * m
+    dst = np.array([[m, m], [m + w - 1, m], [m + w - 1, m + h - 1], [m, m + h - 1]], np.float32)
+    M = cv2.getPerspectiveTransform(q, dst)
+    rgb = np.asarray(img.convert("RGB"))
+    patch = cv2.warpPerspective(rgb, M, (pw, ph), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE).astype(np.float32)
+    iw, ih = int(round(w)), int(round(h))
+    ya, yb = m + int(ih * 0.2), m + int(ih * 0.8)
+    xa, xb = m + int(iw * 0.2), m + int(iw * 0.8)
+    colsP = patch[ya:yb].mean(axis=0)
+    rowsP = patch[:, xa:xb].mean(axis=1)
+    xl = _edge_pos(colsP, 0, 2 * m, m)
+    xr = _edge_pos(colsP, iw, iw + 2 * m, m + iw)
+    yt = _edge_pos(rowsP, 0, 2 * m, m)
+    yb2 = _edge_pos(rowsP, ih, ih + 2 * m, m + ih)
+    inset = max(1, int(round(dpi * 0.006)))
+    x0, x1, y0, y1 = xl + inset, xr - inset, yt + inset, yb2 - inset
+    if x1 - x0 < 40 or y1 - y0 < 40:
+        x0, x1, y0, y1 = m, m + iw, m, m + ih
+    card = Image.fromarray(np.clip(patch[y0:y1, x0:x1], 0, 255).astype(np.uint8))
+    if not keep_orientation and card.height > card.width:
+        card = card.rotate(90, expand=True)
+    return card

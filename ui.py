@@ -426,6 +426,7 @@ SHORTCUT_GROUPS = (
         ("Ctrl+,", "Settings menu"),
         ("PgUp / PgDn / Home / End", "Previous / next / first / last picture"),
         ("Ctrl+Shift+P", "Add from phone"),
+        ("Ctrl+Shift+U", "ID card from files: front + back from pictures (auto crop, real size, A4 / A5 page)"),
         ("Ctrl+Shift+A", "Apply the last setting to all pictures"),
         ("Ctrl+Shift+E", "All pages as one PDF"),
         ("Ctrl+Shift+Left / Right", "Move this page earlier / later"),
@@ -555,6 +556,7 @@ class MainWindow(QMainWindow):
         self.phone_tunnel = None
         self._phone_dlg = None
         self._scan_dlg = None
+        self._idup_dlg = None
         self.setWindowTitle("Image Fixer  -  by " + AUTHOR)
         self.setWindowIcon(make_icon())
         self.setAcceptDrops(True)
@@ -648,6 +650,10 @@ class MainWindow(QMainWindow):
         self.btnPhone = QPushButton()
         _sb(self.btnPhone, "phone", "Add from phone", "Ctrl+Shift+P", extra_tip="Use your phone as a wireless scanner / picture sender (QR code)")
         self.btnPhone.clicked.connect(self.open_phone)
+        self.btnIdFile = QPushButton()
+        _sb(self.btnIdFile, "blank", "ID card from files", "Ctrl+Shift+U",
+            extra_tip="NID front + back from picture files (phone photo, saved scan): auto crop, real size, A4 / A5 page with border")
+        self.btnIdFile.clicked.connect(self.open_id_upload)
         self.btnApplyAll = QPushButton()
         self.btnApplyAll.setProperty("good", True)
         _sb(self.btnApplyAll, "apply", "Apply last setting to all", "Ctrl+Shift+A",
@@ -660,6 +666,7 @@ class MainWindow(QMainWindow):
         l.addWidget(self.btnBlank)
         l.addWidget(self.btnScan)
         l.addWidget(self.btnPhone)
+        l.addWidget(self.btnIdFile)
         self._sepA = sep()
         l.addWidget(self.btnApplyAll)
         l.addSpacing(6)
@@ -712,6 +719,7 @@ class MainWindow(QMainWindow):
         act("New blank page...", self.open_blank)
         act("Scan...", self.open_scan)
         act("Add from phone...", self.open_phone)
+        act("ID card from files...", self.open_id_upload)
         act("Apply last setting to all", lambda: self._with_loaded(self.apply_to_all))
         act("Choose save folder...", self.choose_dir)
         self.actMoreOpen = act("Open save folder", self.open_dir)
@@ -1118,6 +1126,7 @@ class MainWindow(QMainWindow):
         sc("Home", lambda: self.carousel.go_to(0))
         sc("End", lambda: self.carousel.go_to(max(0, len(self.carousel.cards) - 1)) if hasattr(self.carousel, "cards") else None)
         sc("Ctrl+Shift+P", self.open_phone)
+        sc("Ctrl+Shift+U", self.open_id_upload)
         sc("Ctrl+Shift+A", lambda: self._with_loaded(self.apply_to_all), "Apply the last setting to all")
         sc("Ctrl+Shift+Left", lambda: self.move_page(-1), "Page earlier")
         sc("Ctrl+Shift+Right", lambda: self.move_page(1), "Page later")
@@ -1249,10 +1258,10 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(*((6, 4, 6, 4) if small else (12, 6, 12, 6)))
         lay.setSpacing(2 if small else 4)
 
-        words = ((self.btnBlank, "Blank"), (self.btnScan, "Scan"), (self.btnPhone, "Phone"), (self.btnApplyAll, "Apply to all"))
+        words = ((self.btnBlank, "Blank"), (self.btnScan, "Scan"), (self.btnPhone, "Phone"), (self.btnIdFile, "ID file"), (self.btnApplyAll, "Apply to all"))
         for b_, word in words:                              # a word next to each icon - only if the whole bar still fits
             _lb(b_, word)
-        for b_ in (self.lblBrand, self.btnFolder, self.btnOpenDir, self.btnClear, self.btnApplyAll, self.btnPhone, self.lblLogo):
+        for b_ in (self.lblBrand, self.btnFolder, self.btnOpenDir, self.btnClear, self.btnApplyAll, self.btnPhone, self.btnIdFile, self.lblLogo):
             b_.setVisible(True)
         self.btnMore.setVisible(False)
         lay.invalidate()
@@ -1268,6 +1277,7 @@ class MainWindow(QMainWindow):
             for b in (self.btnOpenDir, self.btnClear, self.btnApplyAll):
                 b.setVisible(not more)
             self.btnPhone.setVisible(k < 4)
+            self.btnIdFile.setVisible(k < 4)
             self._sepA.setVisible(not more)
             self.btnMore.setVisible(k >= 2)
             self.lblLogo.setVisible(k < 4)
@@ -2605,6 +2615,12 @@ class MainWindow(QMainWindow):
         if self._scan_dlg is None:
             self._scan_dlg = ScanDialog(self)
         self._scan_dlg.show_front()
+
+    def open_id_upload(self):
+        from idupload import IdUploadDialog
+        if self._idup_dlg is None:
+            self._idup_dlg = IdUploadDialog(self)
+        self._idup_dlg.show_front()
 
     def scan_received(self, paths):
         """Scanned pages (normal mode): every page is a new picture."""
